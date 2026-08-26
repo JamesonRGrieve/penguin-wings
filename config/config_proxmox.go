@@ -58,4 +58,16 @@ type ProxmoxConfiguration struct {
 	// across containers for now; per-server tokens injected at creation are a
 	// hardening item.
 	AgentToken string `json:"agent_token" yaml:"agent_token"`
+
+	// TemplateMap maps a server's selected egg image (the exact docker image ref)
+	// to a base LXC template, overriding Template for that image. Realizes egg to
+	// template selection without a Panel schema change.
+	TemplateMap map[string]string `json:"template_map" yaml:"template_map"`
+
+	// Gateway, when set, gives containers a static IPv4 built from the server's
+	// default allocation IP and SubnetPrefix with this gateway. Otherwise DHCP.
+	Gateway string `json:"gateway" yaml:"gateway"`
+
+	// SubnetPrefix is the CIDR prefix length applied to a static allocation IP.
+	SubnetPrefix int `default:"24" json:"subnet_prefix" yaml:"subnet_prefix"`
 }
