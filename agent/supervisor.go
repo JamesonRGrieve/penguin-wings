@@ -160,6 +160,16 @@ func (s *Supervisor) Running() bool {
 	return s.running
 }
 
+// Pid returns the running process id, or 0 when no process is running.
+func (s *Supervisor) Pid() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running && s.cmd != nil && s.cmd.Process != nil {
+		return s.cmd.Process.Pid
+	}
+	return 0
+}
+
 // Exit returns whether the process has exited, its exit code, and the OOM flag.
 func (s *Supervisor) Exit() (exited bool, code int, oom bool) {
 	s.mu.Lock()
