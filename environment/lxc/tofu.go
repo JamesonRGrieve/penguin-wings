@@ -87,7 +87,11 @@ func runnerEnv(token string) map[string]string {
 		}
 		env[k] = v
 	}
-	env[EnvAPIToken] = token
+	// Only set the token when present; an empty value must not clobber inherited
+	// PROXMOX_VE_* credentials (e.g. username/password auth).
+	if token != "" {
+		env[EnvAPIToken] = token
+	}
 	return env
 }
 
