@@ -392,6 +392,13 @@ type Configuration struct {
 	System SystemConfiguration `json:"system" yaml:"system"`
 	Docker DockerConfiguration `json:"docker" yaml:"docker"`
 
+	// Backend selects the server runtime environment: "docker" (default) or
+	// "lxc" (Proxmox LXC via embedded OpenTofu).
+	Backend string `default:"docker" json:"backend" yaml:"backend"`
+
+	// Proxmox configures the "lxc" backend and is only consulted when Backend is "lxc".
+	Proxmox ProxmoxConfiguration `json:"proxmox" yaml:"proxmox"`
+
 	// Defines internal throttling configurations for server processes to prevent
 	// someone from running an endless loop that spams data to logs.
 	Throttles ConsoleThrottles
