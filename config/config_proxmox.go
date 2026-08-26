@@ -50,4 +50,12 @@ type ProxmoxConfiguration struct {
 	// StateDirectory holds the per-server OpenTofu workspaces. Defaults to a
 	// "tofu" directory under the system root directory when empty.
 	StateDirectory string `json:"state_directory" yaml:"state_directory"`
+
+	// AgentPort is the port the in-container penguin-agent listens on.
+	AgentPort int `default:"8443" json:"agent_port" yaml:"agent_port"`
+
+	// AgentToken authenticates Wings to the in-container penguin-agent. Shared
+	// across containers for now; per-server tokens injected at creation are a
+	// hardening item.
+	AgentToken string `json:"agent_token" yaml:"agent_token"`
 }
