@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,9 @@ func TestRunnerEnv(t *testing.T) {
 	}
 	if _, ok := env["TF_LOG"]; ok {
 		t.Errorf("TF_* vars must be filtered so tfexec can manage them")
+	}
+	if _, ok := runnerEnv("")[EnvAPIToken]; ok {
+		t.Errorf("empty token must leave %s unset so inherited/password auth is preserved", EnvAPIToken)
 	}
 }
 
@@ -88,8 +92,11 @@ func TestRunnerInitPlanIntegration(t *testing.T) {
 	token := os.Getenv("TEST_PVE_API_TOKEN")
 	node := os.Getenv("TEST_PVE_NODE")
 	template := os.Getenv("TEST_PVE_TEMPLATE")
-	if endpoint == "" || token == "" || node == "" || template == "" {
-		t.Skip("set TEST_PVE_ENDPOINT, TEST_PVE_API_TOKEN, TEST_PVE_NODE, TEST_PVE_TEMPLATE to run")
+	// Auth is either an API token (TEST_PVE_API_TOKEN) or username/password taken
+	// from the inherited PROXMOX_VE_USERNAME/PROXMOX_VE_PASSWORD environment.
+	hasUserPass := os.Getenv("PROXMOX_VE_USERNAME") != "" && os.Getenv("PROXMOX_VE_PASSWORD") != ""
+	if endpoint == "" || node == "" || template == "" || (token == "" && !hasUserPass) {
+		t.Skip("set TEST_PVE_ENDPOINT/_NODE/_TEMPLATE and either TEST_PVE_API_TOKEN or PROXMOX_VE_USERNAME+PROXMOX_VE_PASSWORD to run")
 	}
 	execPath, err := LookupExecPath()
 	if err != nil {
@@ -120,5 +127,103 @@ func TestRunnerInitPlanIntegration(t *testing.T) {
 	}
 	if _, err := r.Plan(ctx); err != nil {
 		t.Fatalf("Plan: %v", err)
+	}
+}
+
+// TestRunnerApplyDestroyIntegration is the live create/destroy proof: it applies
+// one throwaway stopped LXC, asserts an immediate re-plan is a no-op (proving the
+// container exists and matches intent), and always destroys it via t.Cleanup so
+// it can never leak. Double-guarded — it only runs when TEST_PVE_APPLY=1 AND the
+// target env is set — so the default suite never mutates a hypervisor.
+func TestRunnerApplyDestroyIntegration(t *testing.T) {
+	if os.Getenv("TEST_PVE_APPLY") != "1" {
+		t.Skip("set TEST_PVE_APPLY=1 (plus the TEST_PVE_* target vars) to run the live create/destroy proof")
+	}
+	endpoint := os.Getenv("TEST_PVE_ENDPOINT")
+	token := os.Getenv("TEST_PVE_API_TOKEN")
+	node := os.Getenv("TEST_PVE_NODE")
+	template := os.Getenv("TEST_PVE_TEMPLATE")
+	storage := os.Getenv("TEST_PVE_STORAGE")
+	bridge := os.Getenv("TEST_PVE_BRIDGE")
+	hasUserPass := os.Getenv("PROXMOX_VE_USERNAME") != "" && os.Getenv("PROXMOX_VE_PASSWORD") != ""
+	if endpoint == "" || node == "" || template == "" || storage == "" || bridge == "" || (token == "" && !hasUserPass) {
+		t.Skip("set TEST_PVE_ENDPOINT/_NODE/_TEMPLATE/_STORAGE/_BRIDGE and either TEST_PVE_API_TOKEN or PROXMOX_VE_USERNAME+PROXMOX_VE_PASSWORD")
+	}
+
+	vmid := 0
+	if v := os.Getenv("TEST_PVE_VMID"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			t.Fatalf("bad TEST_PVE_VMID %q: %v", v, err)
+		}
+		vmid = n
+	}
+	osType := os.Getenv("TEST_PVE_OSTYPE")
+	if osType == "" {
+		osType = DefaultOSType
+	}
+
+	execPath, err := LookupExecPath()
+	if err != nil {
+		t.Skipf("no tofu/terraform binary available: %v", err)
+	}
+
+	dir := t.TempDir()
+	r, err := NewRunner(RunnerConfig{ExecPath: execPath, WorkDir: dir, APIToken: token})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	spec := LXCSpec{
+		Node:           node,
+		VMID:           vmid,
+		Hostname:       "penguin-spike",
+		Description:    "Penguin Wings lifecycle proof — safe to delete",
+		Tags:           []string{"penguin", "spike"},
+		TemplateFileID: template,
+		OSType:         osType,
+		Unprivileged:   true,
+		Cores:          1,
+		MemoryMiB:      512,
+		RootDatastore:  storage,
+		RootSizeGiB:    2,
+		NetworkName:    DefaultNetworkName,
+		Bridge:         bridge,
+		IPv4:           IPv4Config{Address: DHCPAddress},
+	}
+	provider := ProviderConfig{Endpoint: endpoint, Insecure: os.Getenv("TEST_PVE_INSECURE") == "true"}
+
+	if err := r.WriteConfig(spec, provider); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	if err := r.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Register destroy before apply so a failure after create still tears down.
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer ccancel()
+		if err := r.Destroy(cctx); err != nil {
+			t.Errorf("cleanup Destroy: %v", err)
+		}
+	})
+
+	if err := r.Apply(ctx); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// A no-op re-plan proves the container was created and matches intent
+	// (bpg refreshes real state from the node during plan).
+	changed, err := r.Plan(ctx)
+	if err != nil {
+		t.Fatalf("post-apply Plan: %v", err)
+	}
+	if changed {
+		t.Errorf("post-apply plan shows a diff; create is not idempotent")
 	}
 }
