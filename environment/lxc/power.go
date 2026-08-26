@@ -31,6 +31,28 @@ const (
 // ErrPVEClient wraps PVEClient construction/validation failures.
 var ErrPVEClient = errors.New("invalid pve client config")
 
+// APIError is a non-2xx response from the PVE API.
+type APIError struct {
+	StatusCode int
+	Method     string
+	Path       string
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("pve api %s %s: status %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
+// IsContainerNotFound reports whether err indicates the container's config is
+// absent on the node (PVE answers 500 with a "does not exist" body).
+func IsContainerNotFound(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusInternalServerError && strings.Contains(apiErr.Body, "does not exist")
+	}
+	return false
+}
+
 // PVEClient is a minimal Proxmox VE REST client for the container power
 // operations Wings drives directly (rather than through OpenTofu): start,
 // graceful shutdown, force stop, and status. It authenticates with a PVE API
@@ -174,7 +196,7 @@ func (c *PVEClient) do(ctx context.Context, method, path string, form url.Values
 		return nil, fmt.Errorf("read response for %s %s: %w", method, path, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("pve api %s %s: status %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, &APIError{StatusCode: resp.StatusCode, Method: method, Path: path, Body: strings.TrimSpace(string(data))}
 	}
 	return data, nil
 }
