@@ -82,8 +82,12 @@ func (s *Supervisor) Start(ctx context.Context, name string, args []string, dir 
 	s.done = make(chan struct{})
 	done := s.done
 
-	go s.readOutput(pr)
-	go s.wait(cmd, done)
+	readerDone := make(chan struct{})
+	go func() {
+		s.readOutput(pr)
+		close(readerDone)
+	}()
+	go s.wait(cmd, done, readerDone)
 	return nil
 }
 
@@ -96,8 +100,11 @@ func (s *Supervisor) readOutput(pr *os.File) {
 	pr.Close()
 }
 
-func (s *Supervisor) wait(cmd *exec.Cmd, done chan struct{}) {
+func (s *Supervisor) wait(cmd *exec.Cmd, done chan struct{}, readerDone <-chan struct{}) {
 	waitErr := cmd.Wait()
+	// Ensure all output is drained into the buffer before signaling exit, so a
+	// caller waking on Done() sees the complete log.
+	<-readerDone
 	s.mu.Lock()
 	s.running = false
 	s.exited = true

@@ -7,9 +7,9 @@ const (
 	// HeaderAuth carries the bearer token; websocket clients may instead pass it
 	// as a "token" query parameter.
 	HeaderAuth  = "Authorization"
-	authScheme  = "Bearer "
-	tokenQuery  = "token"
-	linesQuery  = "lines"
+	AuthScheme  = "Bearer "
+	QueryToken  = "token"
+	QueryLines  = "lines"
 	consoleNewl = "\n"
 
 	PathStart   = "/v1/start"

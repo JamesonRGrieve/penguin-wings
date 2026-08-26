@@ -66,9 +66,9 @@ func (s *Server) authorized(r *http.Request) bool {
 	if s.token == "" {
 		return false
 	}
-	tok := r.URL.Query().Get(tokenQuery)
-	if h := r.Header.Get(HeaderAuth); strings.HasPrefix(h, authScheme) {
-		tok = strings.TrimPrefix(h, authScheme)
+	tok := r.URL.Query().Get(QueryToken)
+	if h := r.Header.Get(HeaderAuth); strings.HasPrefix(h, AuthScheme) {
+		tok = strings.TrimPrefix(h, AuthScheme)
 	}
 	return subtle.ConstantTimeCompare([]byte(tok), []byte(s.token)) == 1
 }
@@ -135,7 +135,7 @@ func (s *Server) handleStdin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	n := 0
-	if v := r.URL.Query().Get(linesQuery); v != "" {
+	if v := r.URL.Query().Get(QueryLines); v != "" {
 		n, _ = strconv.Atoi(v)
 	}
 	writeJSON(w, LogsResponse{Lines: s.buf.Lines(n)})
