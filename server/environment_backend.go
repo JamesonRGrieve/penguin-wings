@@ -14,6 +14,10 @@ import (
 	"github.com/pelican/wings/environment/lxc"
 )
 
+// defaultSubnetPrefix is the CIDR prefix applied to a static allocation IP when
+// proxmox.subnet_prefix is unset.
+const defaultSubnetPrefix = 24
+
 // configureServerEnvironment builds the ProcessEnvironment for a server based on
 // the configured backend. It replaces the previously hard-coded Docker
 // construction in InitServer so additional backends slot in without disturbing
@@ -100,13 +104,32 @@ func serverToLXCSpec(s *Server, px config.ProxmoxConfiguration) lxc.LXCSpec {
 		rootGiB = int(math.Ceil(float64(b.DiskSpace) / 1024))
 	}
 
+	// egg image -> base template selection, falling back to the configured default.
+	template := px.Template
+	if mapped, ok := px.TemplateMap[cfg.Container.Image]; ok && mapped != "" {
+		template = mapped
+	}
+
+	// allocation -> static IPv4 when a gateway is configured, else DHCP.
+	ipv4 := lxc.IPv4Config{Address: lxc.DHCPAddress}
+	if px.Gateway != "" && cfg.Allocations.DefaultMapping != nil && cfg.Allocations.DefaultMapping.Ip != "" {
+		prefix := px.SubnetPrefix
+		if prefix <= 0 {
+			prefix = defaultSubnetPrefix
+		}
+		ipv4 = lxc.IPv4Config{
+			Address: fmt.Sprintf("%s/%d", cfg.Allocations.DefaultMapping.Ip, prefix),
+			Gateway: px.Gateway,
+		}
+	}
+
 	return lxc.LXCSpec{
 		Node:           px.Node,
 		VMID:           px.VmidBase + cfg.Pid,
 		Hostname:       fmt.Sprintf("penguin-%d", cfg.Pid),
 		Description:    "Penguin server " + s.ID(),
 		Tags:           []string{"penguin"},
-		TemplateFileID: px.Template,
+		TemplateFileID: template,
 		OSType:         px.OsType,
 		Unprivileged:   px.Unprivileged,
 		Cores:          cores,
@@ -116,7 +139,6 @@ func serverToLXCSpec(s *Server, px config.ProxmoxConfiguration) lxc.LXCSpec {
 		RootSizeGiB:    rootGiB,
 		Bridge:         px.Bridge,
 		VLAN:           px.Vlan,
-		// Static-from-allocation IP mapping is Phase 4; DHCP for now.
-		IPv4: lxc.IPv4Config{Address: lxc.DHCPAddress},
+		IPv4:           ipv4,
 	}
 }

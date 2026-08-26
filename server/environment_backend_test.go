@@ -57,3 +57,38 @@ func TestServerToLXCSpec(t *testing.T) {
 		t.Errorf("mapped spec should be renderable: %v", err)
 	}
 }
+
+func TestServerToLXCSpecTemplateMapAndStaticIP(t *testing.T) {
+	s := &Server{}
+	s.cfg.Pid = 3
+	s.cfg.Uuid = "srv"
+	s.cfg.Container.Image = "ghcr.io/pelican-eggs/games:java"
+	s.cfg.Allocations = environment.Allocations{
+		DefaultMapping: &environment.DefaultAllocationMapping{Ip: "10.0.39.5", Port: 25565},
+	}
+
+	px := config.ProxmoxConfiguration{
+		Node:     "pve1",
+		Storage:  "local-zfs",
+		Bridge:   "vmbr0",
+		Template: "local:vztmpl/default.tar.zst",
+		TemplateMap: map[string]string{
+			"ghcr.io/pelican-eggs/games:java": "local:vztmpl/java.tar.zst",
+		},
+		Gateway:      "10.0.39.1",
+		SubnetPrefix: 24,
+		VmidBase:     100000,
+	}
+
+	spec := serverToLXCSpec(s, px)
+
+	if spec.TemplateFileID != "local:vztmpl/java.tar.zst" {
+		t.Errorf("template = %q, want the image-mapped java template", spec.TemplateFileID)
+	}
+	if spec.IPv4.Address != "10.0.39.5/24" || spec.IPv4.Gateway != "10.0.39.1" {
+		t.Errorf("ipv4 = %+v, want static 10.0.39.5/24 gw 10.0.39.1", spec.IPv4)
+	}
+	if err := spec.Validate(); err != nil {
+		t.Errorf("static-IP spec should be renderable: %v", err)
+	}
+}
