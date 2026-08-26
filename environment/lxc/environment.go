@@ -22,9 +22,10 @@ const EnvironmentType = "lxc"
 
 // Internal timeouts for the interface methods that take no context of their own.
 const (
-	createTimeout  = 15 * time.Minute
-	destroyTimeout = 10 * time.Minute
-	existsTimeout  = 30 * time.Second
+	createTimeout    = 15 * time.Minute
+	destroyTimeout   = 10 * time.Minute
+	existsTimeout    = 30 * time.Second
+	agentCallTimeout = 15 * time.Second
 )
 
 // ErrAgentUnavailable marks process-I/O operations (console, stdin, logs, exit
@@ -55,6 +56,9 @@ type Environment struct {
 
 	runner *Runner
 	power  *PVEClient
+
+	agentPort  int
+	agentToken string
 }
 
 // Config bundles everything needed to build an LXC environment for one server.
@@ -67,6 +71,8 @@ type Config struct {
 	Provider      ProviderConfig
 	Runner        *Runner
 	Power         *PVEClient
+	AgentPort     int
+	AgentToken    string
 }
 
 // New builds an LXC environment. The container need not exist yet.
@@ -82,16 +88,18 @@ func New(cfg Config) (*Environment, error) {
 		return nil, fmt.Errorf("lxc environment: power client is required")
 	}
 	return &Environment{
-		id:       cfg.ID,
-		config:   cfg.Configuration,
-		emitter:  events.NewBus(),
-		st:       system.NewAtomicString(environment.ProcessOfflineState),
-		node:     cfg.Node,
-		vmid:     cfg.VMID,
-		spec:     cfg.Spec,
-		provider: cfg.Provider,
-		runner:   cfg.Runner,
-		power:    cfg.Power,
+		id:         cfg.ID,
+		config:     cfg.Configuration,
+		emitter:    events.NewBus(),
+		st:         system.NewAtomicString(environment.ProcessOfflineState),
+		node:       cfg.Node,
+		vmid:       cfg.VMID,
+		spec:       cfg.Spec,
+		provider:   cfg.Provider,
+		runner:     cfg.Runner,
+		power:      cfg.Power,
+		agentPort:  cfg.AgentPort,
+		agentToken: cfg.AgentToken,
 	}, nil
 }
 
@@ -288,17 +296,66 @@ func (e *Environment) Uptime(ctx context.Context) (int64, error) {
 	return st.Uptime * int64(time.Second/time.Millisecond), nil
 }
 
-// ExitState returns the game process exit code and OOM flag. This requires the
-// penguin-agent and is not yet available.
-func (e *Environment) ExitState() (uint32, bool, error) {
-	return 0, false, ErrAgentUnavailable
+// agentClient resolves the in-container agent's address (via the container's
+// live IP) and returns a client for it. Returns ErrAgentUnavailable when no
+// agent token is configured.
+func (e *Environment) agentClient(ctx context.Context) (*AgentClient, error) {
+	if e.agentToken == "" {
+		return nil, ErrAgentUnavailable
+	}
+	ip, err := e.power.ContainerIPv4(ctx, e.node, e.vmid)
+	if err != nil {
+		return nil, fmt.Errorf("resolve agent address: %w", err)
+	}
+	return NewAgentClient(fmt.Sprintf("http://%s:%d", ip, e.agentPort), e.agentToken), nil
 }
 
-// Attach connects to the container console. Requires the penguin-agent.
-func (e *Environment) Attach(_ context.Context) error { return ErrAgentUnavailable }
+// Attach streams the container console output to the registered log callback via
+// the penguin-agent until the context is cancelled.
+func (e *Environment) Attach(ctx context.Context) error {
+	client, err := e.agentClient(ctx)
+	if err != nil {
+		return err
+	}
+	return client.Attach(ctx, func(line []byte) {
+		e.logCallbackMx.Lock()
+		cb := e.logCallback
+		e.logCallbackMx.Unlock()
+		if cb != nil {
+			cb(line)
+		}
+	})
+}
 
-// SendCommand writes to the game process stdin. Requires the penguin-agent.
-func (e *Environment) SendCommand(string) error { return ErrAgentUnavailable }
+// SendCommand writes a console command to the game process stdin via the agent.
+func (e *Environment) SendCommand(command string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
+	defer cancel()
+	client, err := e.agentClient(ctx)
+	if err != nil {
+		return err
+	}
+	return client.SendCommand(ctx, command)
+}
 
-// Readlog tails the process log. Requires the penguin-agent.
-func (e *Environment) Readlog(int) ([]string, error) { return nil, ErrAgentUnavailable }
+// Readlog returns up to the last n console lines via the agent.
+func (e *Environment) Readlog(n int) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
+	defer cancel()
+	client, err := e.agentClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.Readlog(ctx, n)
+}
+
+// ExitState returns the game process exit code and OOM flag via the agent.
+func (e *Environment) ExitState() (uint32, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
+	defer cancel()
+	client, err := e.agentClient(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	return client.ExitState(ctx)
+}
