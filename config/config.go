@@ -289,7 +289,6 @@ type Backups struct {
 	// Defaults to "best_speed" (level 1)
 	CompressionLevel string `default:"best_speed" yaml:"compression_level"`
 
-
 	// RestoreHostAllowlist allows backup restore downloads to connect to otherwise blocked
 	// private/internal destinations. Entries may be hostnames, IP addresses, or CIDR ranges.
 	RestoreHostAllowlist []string `yaml:"restore_host_allowlist"`
@@ -368,6 +367,13 @@ type Configuration struct {
 	Api    ApiConfiguration    `json:"api" yaml:"api"`
 	System SystemConfiguration `json:"system" yaml:"system"`
 	Docker DockerConfiguration `json:"docker" yaml:"docker"`
+
+	// Backend selects the server runtime environment: "docker" (default) or
+	// "lxc" (Proxmox LXC via embedded OpenTofu).
+	Backend string `default:"docker" json:"backend" yaml:"backend"`
+
+	// Proxmox configures the "lxc" backend and is only consulted when Backend is "lxc".
+	Proxmox ProxmoxConfiguration `json:"proxmox" yaml:"proxmox"`
 
 	// Defines internal throttling configurations for server processes to prevent
 	// someone from running an endless loop that spams data to logs.
