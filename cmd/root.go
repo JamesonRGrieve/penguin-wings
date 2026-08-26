@@ -53,7 +53,7 @@ var (
 
 var rootCommand = &cobra.Command{
 	Use:   "wings",
-	Short: "Runs the API server allowing programmatic control of game servers for Pelican Panel.",
+	Short: "Runs the API server allowing programmatic control of game servers for Penguin Panel.",
 	PreRun: func(cmd *cobra.Command, args []string) {
 		initConfig()
 		initLogging()
@@ -594,17 +594,17 @@ func (h hue) fg(m bannerColor) string {
 	}
 }
 
-// ANSI Shadow "PELICAN" wordmark, six rows painted top→bottom cyan→blue.
-var pelicanRows = [6]string{
-	`██████╗ ███████╗██╗     ██╗ ██████╗ █████╗ ███╗   ██╗`,
-	`██╔══██╗██╔════╝██║     ██║██╔════╝██╔══██╗████╗  ██║`,
-	`██████╔╝█████╗  ██║     ██║██║     ███████║██╔██╗ ██║`,
-	`██╔═══╝ ██╔══╝  ██║     ██║██║     ██╔══██║██║╚██╗██║`,
-	`██║     ███████╗███████╗██║╚██████╗██║  ██║██║ ╚████║`,
-	`╚═╝     ╚══════╝╚══════╝╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝`,
+// ANSI Shadow "PENGUIN" wordmark, six rows painted top→bottom cyan→blue.
+var penguinRows = [6]string{
+	`██████╗ ███████╗███╗   ██╗ ██████╗ ██╗   ██╗██╗███╗   ██╗`,
+	`██╔══██╗██╔════╝████╗  ██║██╔════╝ ██║   ██║██║████╗  ██║`,
+	`██████╔╝█████╗  ██╔██╗ ██║██║  ███╗██║   ██║██║██╔██╗ ██║`,
+	`██╔═══╝ ██╔══╝  ██║╚██╗██║██║   ██║██║   ██║██║██║╚██╗██║`,
+	`██║     ███████╗██║ ╚████║╚██████╔╝╚██████╔╝██║██║ ╚████║`,
+	`╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝`,
 }
 
-var pelicanRowHues = [6]hue{
+var penguinRowHues = [6]hue{
 	{103, 232, 249, 123}, // #67E8F9
 	{56, 189, 248, 117},  // #38BDF8
 	{14, 165, 233, 39},   // #0EA5E9
@@ -624,7 +624,7 @@ var (
 )
 
 // printLogo renders the wings startup banner once, before log output begins:
-// an ANSI Shadow "PELICAN" wordmark with a vertical cyan→blue gradient, the
+// an ANSI Shadow "PENGUIN" wordmark with a vertical cyan→blue gradient, the
 // WINGS rule + version, a tagline, link rows, and a star call-to-action. Color
 // depth adapts to the terminal (truecolor / 256-color / none).
 func printLogo() {
@@ -645,8 +645,8 @@ func printLogo() {
 	b.WriteByte('\n')
 
 	// 1. Wordmark — one color per row.
-	for i, row := range pelicanRows {
-		line(pelicanRowHues[i].fg(m), row)
+	for i, row := range penguinRows {
+		line(penguinRowHues[i].fg(m), row)
 	}
 
 	// 2. WINGS rule (indent 6) with the version centered beneath "W I N G S",
@@ -678,13 +678,13 @@ func printLogo() {
 			hueCyan.fg(m), url,
 		)
 	}
-	linkRow("Source", "Star us on GitHub", "github.com/pelican/wings")
-	linkRow("Docs", "Get started", "pelican.dev/docs")
+	linkRow("Source", "Star us on GitHub", "github.com/JamesonRGrieve/penguin-wings")
+	linkRow("Docs", "Get started", "pengwings.dev/docs")
 
 	// 5. Star call-to-action.
 	b.WriteByte('\n')
-	line(hueYellow.fg(m), bold, "★ Help Pelican soar: Star the project on GitHub")
-	line(hueCyan.fg(m), underline, "https://github.com/pelican/panel")
+	line(hueYellow.fg(m), bold, "★ Help Penguin soar: Star the project on GitHub")
+	line(hueCyan.fg(m), underline, "https://github.com/JamesonRGrieve/penguin-panel")
 
 	b.WriteByte('\n')
 	fmt.Print(b.String())
