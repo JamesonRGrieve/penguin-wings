@@ -8,6 +8,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Run the agent (and every process it supervises: installs, the game) as the
+# unprivileged container user, never root. systemd reads EnvironmentFile as root
+# before dropping privileges, so the token file stays root-owned.
+User=container
+Group=container
+WorkingDirectory=/home/container
 EnvironmentFile=/etc/penguin-agent/agent.env
 ExecStart=/usr/local/bin/penguin-agent --addr :8443
 Restart=always
