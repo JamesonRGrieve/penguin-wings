@@ -2,8 +2,7 @@
 
 ## Supported Versions
 
-While Pelican is in beta, we only provide security fixes for the most recent beta release. Older beta releases are unsupported.  
-![](https://img.shields.io/github/v/release/pelican/wings?label=latest-release)
+While Pelican is in beta, we only provide security fixes for the most recent beta release. Older beta releases are unsupported.
 
 ## Reporting a Vulnerability
 
