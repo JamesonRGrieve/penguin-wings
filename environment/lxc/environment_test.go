@@ -158,6 +158,11 @@ func TestEnvironmentStart(t *testing.T) {
 			fmt.Fprint(w, `{"data":"UPID:start"}`)
 			return
 		}
+		// The start op waits for its node task; answer the task poll as done.
+		if strings.Contains(r.URL.Path, "/tasks/") {
+			fmt.Fprint(w, `{"data":{"status":"stopped","exitstatus":"OK"}}`)
+			return
+		}
 		// status/current: first call (IsRunning) stopped, then running.
 		status := StatusStopped
 		if statusCalls.Add(1) >= 2 {

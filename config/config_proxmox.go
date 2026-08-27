@@ -55,4 +55,27 @@ type ProxmoxConfiguration struct {
 
 	// SubnetPrefix is the CIDR prefix length applied to a static allocation IP.
 	SubnetPrefix int `default:"24" json:"subnet_prefix" yaml:"subnet_prefix"`
+
+	// SSH configures the scoped node channel used ONLY for the install phase
+	// (pct exec/push into the server's container as container-root). Everything
+	// else runs through the API token. The account is a locked-down penguin@pam
+	// user whose sudo is limited to the penguin-pct wrapper; see README.
+	SSH SSHConfiguration `json:"ssh" yaml:"ssh"`
+}
+
+// SSHConfiguration is the scoped node SSH channel for the install phase.
+type SSHConfiguration struct {
+	// Host is the PVE node's SSH host (defaults to the API endpoint host when empty).
+	Host string `json:"host" yaml:"host"`
+	// Port is the SSH port.
+	Port int `default:"22" json:"port" yaml:"port"`
+	// User is the scoped node account (e.g. "penguin").
+	User string `default:"penguin" json:"user" yaml:"user"`
+	// PrivateKeyPath is the path to the SSH private key for User.
+	PrivateKeyPath string `json:"private_key_path" yaml:"private_key_path"`
+	// Wrapper is the sudo-restricted pct wrapper the account may run.
+	Wrapper string `default:"/usr/local/bin/penguin-pct" json:"wrapper" yaml:"wrapper"`
+	// StagingDir is a directory under the account's home that pushable files are
+	// written to before pct push (the wrapper requires push sources live here).
+	StagingDir string `default:"/var/lib/penguin" json:"staging_dir" yaml:"staging_dir"`
 }

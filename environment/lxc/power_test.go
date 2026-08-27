@@ -96,6 +96,11 @@ func TestPVEClientPowerRequests(t *testing.T) {
 			t.Parallel()
 			var gotPath, gotMethod, gotTimeout string
 			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				// The power op waits for its node task; answer the task poll as done.
+				if strings.Contains(r.URL.Path, "/tasks/") {
+					fmt.Fprint(w, `{"data":{"status":"stopped","exitstatus":"OK"}}`)
+					return
+				}
 				gotPath, gotMethod = r.URL.Path, r.Method
 				gotTimeout = r.PostFormValue("timeout")
 				fmt.Fprint(w, `{"data":"UPID:task"}`)

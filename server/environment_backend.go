@@ -5,6 +5,7 @@ package server
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -71,6 +72,26 @@ func newLXCEnvironment(s *Server, envCfg *environment.Configuration) (environmen
 		return nil, err
 	}
 
+	// Scoped SSH channel for the install phase (optional; nil disables install).
+	var sshClient *lxc.SSHClient
+	if px.SSH.PrivateKeyPath != "" {
+		host := px.SSH.Host
+		if host == "" {
+			host = hostFromEndpoint(px.Endpoint)
+		}
+		sshClient, err = lxc.NewSSHClient(lxc.SSHConfig{
+			Host:           host,
+			Port:           px.SSH.Port,
+			User:           px.SSH.User,
+			PrivateKeyPath: px.SSH.PrivateKeyPath,
+			Wrapper:        px.SSH.Wrapper,
+			StagingDir:     px.SSH.StagingDir,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	spec := serverToLXCSpec(s, px)
 	return lxc.New(lxc.Config{
 		ID:            s.ID(),
@@ -81,8 +102,19 @@ func newLXCEnvironment(s *Server, envCfg *environment.Configuration) (environmen
 		Provider:      lxc.ProviderConfig{Endpoint: px.Endpoint, Insecure: px.Insecure},
 		Runner:        runner,
 		Power:         power,
+		SSH:           sshClient,
 		ImageStorage:  px.ImageStorage,
 	})
+}
+
+// hostFromEndpoint extracts the hostname from a PVE API endpoint URL, so the SSH
+// channel can default to the same node as the API when ssh.host is unset.
+func hostFromEndpoint(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	return u.Hostname()
 }
 
 // serverToLXCSpec maps a server's Panel-provided configuration (build limits,
