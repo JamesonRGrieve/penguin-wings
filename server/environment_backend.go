@@ -135,6 +135,11 @@ func serverToLXCSpec(s *Server, px config.ProxmoxConfiguration) lxc.LXCSpec {
 		rootGiB = int(math.Ceil(float64(b.DiskSpace) / 1024))
 	}
 
+	nameservers := px.Nameservers
+	if len(nameservers) == 0 {
+		nameservers = []string{"1.1.1.1"}
+	}
+
 	// allocation -> static IPv4 when a gateway is configured, else DHCP.
 	ipv4 := lxc.IPv4Config{Address: lxc.DHCPAddress}
 	if px.Gateway != "" && cfg.Allocations.DefaultMapping != nil && cfg.Allocations.DefaultMapping.Ip != "" {
@@ -166,5 +171,6 @@ func serverToLXCSpec(s *Server, px config.ProxmoxConfiguration) lxc.LXCSpec {
 		HostManaged: true,
 		VLAN:        px.Vlan,
 		IPv4:        ipv4,
+		Nameservers: nameservers,
 	}
 }
