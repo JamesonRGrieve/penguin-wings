@@ -36,7 +36,10 @@ func TestShellJoin(t *testing.T) {
 
 func TestInstallWrapper(t *testing.T) {
 	t.Parallel()
-	w := installWrapper(map[string]string{"SERVER_JARFILE": "server.jar", "MSG": "hi there"})
+	w := installWrapper(map[string]string{"SERVER_JARFILE": "server.jar", "MSG": "hi there"}, []string{"1.1.1.1"})
+	if !strings.Contains(w, "echo 'nameserver 1.1.1.1' >> /etc/resolv.conf") {
+		t.Errorf("wrapper missing resolver:\n%s", w)
+	}
 	if !strings.Contains(w, "ln -sfn "+dataDir+" "+serverDir) {
 		t.Errorf("wrapper missing /mnt/server symlink:\n%s", w)
 	}

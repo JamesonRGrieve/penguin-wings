@@ -60,7 +60,7 @@ func (e *Environment) Install(ctx context.Context, spec InstallSpec) error {
 	if err := e.ssh.Push(e.vmid, []byte(spec.Script), "0755", eggScriptPath); err != nil {
 		return fmt.Errorf("push egg install script: %w", err)
 	}
-	if err := e.ssh.Push(e.vmid, []byte(installWrapper(spec.Env)), "0755", wrapperPath); err != nil {
+	if err := e.ssh.Push(e.vmid, []byte(installWrapper(spec.Env, e.spec.Nameservers)), "0755", wrapperPath); err != nil {
 		return fmt.Errorf("push install wrapper: %w", err)
 	}
 	if out, err := e.ssh.PctExec(e.vmid, "bash", wrapperPath); err != nil {
@@ -90,9 +90,17 @@ func (e *Environment) Install(ctx context.Context, spec InstallSpec) error {
 // installWrapper builds the script the install runs inside the CT: it exposes the
 // egg's /mnt/server convention (symlinked to the data dir), exports the egg
 // variables, and invokes the egg's own script. Values are single-quote escaped.
-func installWrapper(env map[string]string) string {
+func installWrapper(env map[string]string, nameservers []string) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/bash\nset -e\n")
+	// OCI (unmanaged) app containers get no resolver from PVE, so write one here:
+	// the egg install scripts fetch game files over the network.
+	if len(nameservers) > 0 {
+		b.WriteString(": > /etc/resolv.conf\n")
+		for _, ns := range nameservers {
+			b.WriteString("echo 'nameserver " + ns + "' >> /etc/resolv.conf\n")
+		}
+	}
 	b.WriteString("ln -sfn " + dataDir + " " + serverDir + "\n")
 	writeExports(&b, env)
 	b.WriteString("cd " + serverDir + "\n")
