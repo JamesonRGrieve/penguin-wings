@@ -118,7 +118,11 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	log.WithField("path", filepath.Join(config.Get().System.LogDirectory, "wings.log")).Info("writing log files to disk")
 	log.WithField("config_file", configPath).Info("loading configuration from file")
 
-	if isDockerSnap() {
+	// The Docker daemon is only required for the docker backend; the lxc backend
+	// drives Proxmox over the API and never touches a local Docker socket.
+	dockerBackend := config.Get().Backend != "lxc"
+
+	if dockerBackend && isDockerSnap() {
 		log.Error("Docker Snap installation detected. Exiting...")
 		os.Exit(1)
 	}
@@ -188,9 +192,11 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		return
 	}
 
-	if err := environment.ConfigureDocker(cmd.Context()); err != nil {
-		log.WithField("error", err).Fatal("failed to configure docker environment")
-		return
+	if dockerBackend {
+		if err := environment.ConfigureDocker(cmd.Context()); err != nil {
+			log.WithField("error", err).Fatal("failed to configure docker environment")
+			return
+		}
 	}
 
 	if err := config.WriteToDisk(config.Get()); err != nil {

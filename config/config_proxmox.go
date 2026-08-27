@@ -56,6 +56,11 @@ type ProxmoxConfiguration struct {
 	// SubnetPrefix is the CIDR prefix length applied to a static allocation IP.
 	SubnetPrefix int `default:"24" json:"subnet_prefix" yaml:"subnet_prefix"`
 
+	// Nameservers set the container's DNS resolvers. Egg install scripts fetch
+	// game files over the network, so a resolver is required; defaults to 1.1.1.1
+	// when unset.
+	Nameservers []string `json:"nameservers" yaml:"nameservers"`
+
 	// SSH configures the scoped node channel used ONLY for the install phase
 	// (pct exec/push into the server's container as container-root). Everything
 	// else runs through the API token. The account is a locked-down penguin@pam
