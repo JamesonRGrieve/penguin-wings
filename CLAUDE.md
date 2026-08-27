@@ -30,17 +30,23 @@ dependency on any private infra.
   concern. An LXC guest is a `proxmox_virtual_environment_container`. Renderers sit
   behind a `NodeBackend` interface so a future backend drops in without touching
   callers.
-- **Provisioning:** base LXC template → declarative persistent LXC → **atomic
-  Ansible as a separate declarative step**, used *only* where Tofu can't express
-  the config. No imperative bootstrapping in Go.
+- **The egg's OCI image is the container base.** Each Pelican/Pterodactyl egg
+  names a `docker_image`; Wings pulls it onto storage (`oci-registry-pull`,
+  idempotent, keyed on the image ref) and creates the persistent LXC **directly
+  from that image** via bpg (PVE 9.1+ OCI application containers). The image's own
+  runtime and non-root user apply as-is — **nothing per-egg is baked or
+  configured, and there is no universal base template.** The egg's install script
+  and startup command drive the game (Phase 5). No imperative bootstrapping in Go.
 - **Persistent lifecycle.** An LXC is created on install and destroyed on delete.
   `Start`/`Stop`/`Restart` are **power-state changes** (PVE start/stop), never
   recreation.
-- **Detached-daemon bridge — `penguin-agent`.** Central Wings can't touch the
-  container's stdio or files, so an in-container agent (shipped in the base
-  template) serves console stdio, the SFTP data layer, resource stats, and backup
-  hooks back to Wings over one authenticated channel. (Chosen over a PVE-API-only
-  bridge, which would make the live console materially worse than upstream.)
+- **PVE-native process visibility — no in-container agent.** Because the OCI image
+  is self-sufficient, Wings needs nothing running inside the container. Console
+  (PVE `termproxy`), metrics (`status/current` + `rrddata`), and run state all come
+  from the same PVE API Wings already drives. (An earlier in-container
+  `penguin-agent` was dropped as redundant once the egg's OCI image — not a
+  hand-built base template — became the container base; PVE's metrics are
+  container-wide via cgroups, more accurate than a per-process agent.)
 
 ## How it maps onto the existing daemon
 
@@ -51,8 +57,8 @@ minimal disturbance (good for clean rebases). The interface cleaves in two:
 
 | Interface methods | Realized by |
 |---|---|
-| `Create` `Destroy` `Exists` `IsRunning` `Start` `Stop` `WaitForStop` `Terminate` `InSituUpdate` | Embedded Tofu + bpg (infra) + PVE power API |
-| `Attach` `SendCommand` `Readlog` `ExitState` `SetLogCallback` `Uptime` | `penguin-agent` (in-container process I/O) |
+| `Create` `Destroy` `Exists` `IsRunning` `Start` `Stop` `WaitForStop` `Terminate` `InSituUpdate` | Embedded Tofu + bpg (infra, incl. OCI image pull) + PVE power API |
+| `Attach` `SendCommand` `Readlog` `ExitState` `SetLogCallback` `Uptime` | PVE API — console via `termproxy`, uptime/state via `status/current`, exit best-effort off container state |
 | `Type` `Config` `Events` `State`/`SetState` | Reused daemon plumbing (`Type()` → `"lxc"`) |
 
 ## Source of truth
@@ -81,22 +87,30 @@ bootstrap. `--no-verify` forbidden without explicit authorization.
 0. **Fork + plumbing** — DONE: cloned with full history, `upstream` remote,
    AGPL `LICENSE` + MIT `NOTICE`, this `CLAUDE.md`, project memory. Toolchain
    verified (Go 1.25.0, OpenTofu 1.11.5).
-1. **bpg spike** — embedded `tfexec` stands up + tears down one persistent LXC
-   from a base template; nail the `proxmox_virtual_environment_container` HCL and
-   bpg auth model. (Blocked on an operator-named Proxmox target — see below.)
-2. **Wings core** — `environment/lxc` (`LXCSpec` + HCL renderer + reconcile loop)
-   replaces the Docker environment behind `ProcessEnvironment`.
-3. **`penguin-agent`** — the console / SFTP / stats / backup bridge.
+1. **bpg spike** — DONE: embedded `tfexec` stands up + tears down one persistent
+   LXC created **from an egg's OCI image**, verified on lab PVE 9.2 by
+   `TestLabOCILifecycle`; `proxmox_virtual_environment_container` HCL, bpg auth,
+   and the scoped `Penguin` token all nailed (see `README.md`).
+2. **Wings core** — `environment/lxc` (`LXCSpec` + JSON renderer + lifecycle)
+   replaces the Docker environment behind `ProcessEnvironment`. Container is
+   created from the egg image (`EnsureOCIImage` → bpg). DONE bar the game-launch.
+3. **PVE-native process I/O** — console (`termproxy`), metrics, and exit state via
+   the PVE API; no in-container agent. Console wiring is the open item.
 4. **Panel changes** — see `penguin-panel/CLAUDE.md`.
-5. **v1 hardening** — egg-install-script compatibility pass, tests, docs.
+5. **v1 hardening** — egg install-script + startup-command execution (the
+   game-launch), compatibility pass, tests, docs.
 
 ## Open / parked decisions
 
 - **Penguin git remote/hosting** — undecided; no Penguin `origin` yet, only
   `upstream`.
-- **Phase 1 spike Proxmox target** — PARKED. Needs an operator-named node plus
-  authorization to create/destroy throwaway LXCs on it (API token pulled from
-  Bao/NetBox once named).
+- **Game-launch (Phase 5)** — OPEN. The egg's install script and startup command
+  must run in the OCI container without an agent: the run path is the image's
+  entrypoint + the egg `STARTUP`; the install path (download server files into the
+  rootfs) is not yet wired. This is the last piece before a game actually runs.
+- **PVE console (termproxy)** — OPEN. `Attach`/`SendCommand` return
+  `ErrConsolePending` until the `termproxy`/`vncwebsocket` protocol is wired;
+  `ExitState` is best-effort (a stopped container reports a clean exit).
 - **PDM (Proxmox Datacenter Manager)** — documented target, **PARKED**, not built
   in v1. Its guest-create API surface is unverified; if it can't create guests the
   eventual PDM backend routes to the resolved PVE node API. Keep the `NodeBackend`
