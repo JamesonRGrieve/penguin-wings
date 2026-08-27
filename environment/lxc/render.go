@@ -86,10 +86,11 @@ type tfFeatures struct {
 }
 
 type tfNIC struct {
-	Name       string `json:"name"`
-	Bridge     string `json:"bridge,omitempty"`
-	VLANID     int    `json:"vlan_id,omitempty"`
-	MACAddress string `json:"mac_address,omitempty"`
+	Name        string `json:"name"`
+	Bridge      string `json:"bridge,omitempty"`
+	VLANID      int    `json:"vlan_id,omitempty"`
+	MACAddress  string `json:"mac_address,omitempty"`
+	HostManaged bool   `json:"host_managed,omitempty"`
 }
 
 type tfMount struct {
@@ -188,10 +189,11 @@ func renderContainer(spec LXCSpec) tfContainer {
 		},
 		Features: renderFeatures(spec.Features),
 		NetworkInterface: []tfNIC{{
-			Name:       spec.NetworkName,
-			Bridge:     spec.Bridge,
-			VLANID:     spec.VLAN,
-			MACAddress: spec.MACAddress,
+			Name:        spec.NetworkName,
+			Bridge:      spec.Bridge,
+			VLANID:      spec.VLAN,
+			MACAddress:  spec.MACAddress,
+			HostManaged: spec.HostManaged,
 		}},
 		MountPoint:     renderMounts(spec.Mounts),
 		Initialization: renderInitialization(spec),

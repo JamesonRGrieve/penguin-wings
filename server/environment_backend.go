@@ -81,14 +81,15 @@ func newLXCEnvironment(s *Server, envCfg *environment.Configuration) (environmen
 		Provider:      lxc.ProviderConfig{Endpoint: px.Endpoint, Insecure: px.Insecure},
 		Runner:        runner,
 		Power:         power,
+		ImageStorage:  px.ImageStorage,
 	})
 }
 
 // serverToLXCSpec maps a server's Panel-provided configuration (build limits,
 // allocations, identity) onto an LXCSpec. The Panel `id` (guaranteed unique)
-// yields a stable, collision-free VMID. The egg image is not yet mapped to a
-// per-egg template — a configured base template is used and the egg install
-// runs inside the container (Phase 4/5).
+// yields a stable, collision-free VMID. The egg's own OCI image is the container
+// base (Image); the environment pulls it onto storage at Create time, so no base
+// template is configured and the image's own runtime and non-root user apply.
 func serverToLXCSpec(s *Server, px config.ProxmoxConfiguration) lxc.LXCSpec {
 	cfg := s.Config()
 	b := cfg.Build
@@ -100,12 +101,6 @@ func serverToLXCSpec(s *Server, px config.ProxmoxConfiguration) lxc.LXCSpec {
 	rootGiB := 0
 	if b.DiskSpace > 0 {
 		rootGiB = int(math.Ceil(float64(b.DiskSpace) / 1024))
-	}
-
-	// egg image -> base template selection, falling back to the configured default.
-	template := px.Template
-	if mapped, ok := px.TemplateMap[cfg.Container.Image]; ok && mapped != "" {
-		template = mapped
 	}
 
 	// allocation -> static IPv4 when a gateway is configured, else DHCP.
@@ -122,21 +117,22 @@ func serverToLXCSpec(s *Server, px config.ProxmoxConfiguration) lxc.LXCSpec {
 	}
 
 	return lxc.LXCSpec{
-		Node:           px.Node,
-		VMID:           px.VmidBase + cfg.Pid,
-		Hostname:       fmt.Sprintf("penguin-%d", cfg.Pid),
-		Description:    "Penguin server " + s.ID(),
-		Tags:           []string{"penguin"},
-		TemplateFileID: template,
-		OSType:         px.OsType,
-		Unprivileged:   px.Unprivileged,
-		Cores:          cores,
-		MemoryMiB:      int(b.MemoryLimit),
-		SwapMiB:        int(b.Swap),
-		RootDatastore:  px.Storage,
-		RootSizeGiB:    rootGiB,
-		Bridge:         px.Bridge,
-		VLAN:           px.Vlan,
-		IPv4:           ipv4,
+		Node:          px.Node,
+		VMID:          px.VmidBase + cfg.Pid,
+		Hostname:      fmt.Sprintf("penguin-%d", cfg.Pid),
+		Description:   "Penguin server " + s.ID(),
+		Tags:          []string{"penguin"},
+		Image:         cfg.Container.Image,
+		Unprivileged:  px.Unprivileged,
+		Cores:         cores,
+		MemoryMiB:     int(b.MemoryLimit),
+		SwapMiB:       int(b.Swap),
+		RootDatastore: px.Storage,
+		RootSizeGiB:   rootGiB,
+		Bridge:        px.Bridge,
+		// OCI application containers have no init to configure their own NIC.
+		HostManaged: true,
+		VLAN:        px.Vlan,
+		IPv4:        ipv4,
 	}
 }
