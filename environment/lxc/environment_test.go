@@ -94,20 +94,25 @@ func TestEnvironmentSetStateInvalidPanics(t *testing.T) {
 	e.SetState("bogus")
 }
 
-func TestEnvironmentAgentStubs(t *testing.T) {
+func TestEnvironmentConsoleStubs(t *testing.T) {
 	t.Parallel()
 	e := testEnv(t, &PVEClient{})
-	if err := e.Attach(context.Background()); !errors.Is(err, ErrAgentUnavailable) {
-		t.Errorf("Attach err = %v, want ErrAgentUnavailable", err)
+	// Console I/O is served via PVE's terminal proxy, not yet wired.
+	if err := e.Attach(context.Background()); !errors.Is(err, ErrConsolePending) {
+		t.Errorf("Attach err = %v, want ErrConsolePending", err)
 	}
-	if err := e.SendCommand("say hi"); !errors.Is(err, ErrAgentUnavailable) {
-		t.Errorf("SendCommand err = %v, want ErrAgentUnavailable", err)
+	if err := e.SendCommand("say hi"); !errors.Is(err, ErrConsolePending) {
+		t.Errorf("SendCommand err = %v, want ErrConsolePending", err)
 	}
-	if _, err := e.Readlog(10); !errors.Is(err, ErrAgentUnavailable) {
-		t.Errorf("Readlog err = %v, want ErrAgentUnavailable", err)
+	// Readlog is best-effort: PVE keeps no historical console log, so it returns
+	// nothing without error.
+	if lines, err := e.Readlog(10); err != nil || lines != nil {
+		t.Errorf("Readlog = (%v, %v), want (nil, nil)", lines, err)
 	}
-	if _, _, err := e.ExitState(); !errors.Is(err, ErrAgentUnavailable) {
-		t.Errorf("ExitState err = %v, want ErrAgentUnavailable", err)
+	// ExitState is best-effort: PVE does not expose the game exit code, so a
+	// clean (0, no OOM) state is reported.
+	if code, oom, err := e.ExitState(); code != 0 || oom || err != nil {
+		t.Errorf("ExitState = (%d, %v, %v), want (0, false, nil)", code, oom, err)
 	}
 }
 

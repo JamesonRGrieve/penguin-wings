@@ -171,41 +171,6 @@ func (c *PVEClient) WaitForStatus(ctx context.Context, node string, vmid int, ta
 	}
 }
 
-// containerInterface is one network interface as reported by the PVE
-// lxc/{vmid}/interfaces endpoint.
-type containerInterface struct {
-	Name string `json:"name"`
-	Inet string `json:"inet"` // e.g. "10.0.0.5/24"
-}
-
-// ContainerIPv4 returns the first non-loopback IPv4 address of the running
-// container, used to reach the in-container penguin-agent.
-func (c *PVEClient) ContainerIPv4(ctx context.Context, node string, vmid int) (string, error) {
-	data, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/lxc/%d/interfaces", node, vmid), nil)
-	if err != nil {
-		return "", err
-	}
-	var wrap struct {
-		Data []containerInterface `json:"data"`
-	}
-	if err := json.Unmarshal(data, &wrap); err != nil {
-		return "", fmt.Errorf("decode container interfaces: %w", err)
-	}
-	for _, iface := range wrap.Data {
-		if iface.Name == "lo" || iface.Inet == "" {
-			continue
-		}
-		ip := iface.Inet
-		if i := strings.IndexByte(ip, '/'); i >= 0 {
-			ip = ip[:i]
-		}
-		if ip != "" && !strings.HasPrefix(ip, "127.") {
-			return ip, nil
-		}
-	}
-	return "", fmt.Errorf("no ipv4 address for container %d on %s", vmid, node)
-}
-
 // do performs an authenticated PVE API request and returns the raw body. A form
 // (may be empty, non-nil) makes it a form-encoded POST body.
 func (c *PVEClient) do(ctx context.Context, method, path string, form url.Values) ([]byte, error) {
