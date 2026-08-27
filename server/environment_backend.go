@@ -81,8 +81,6 @@ func newLXCEnvironment(s *Server, envCfg *environment.Configuration) (environmen
 		Provider:      lxc.ProviderConfig{Endpoint: px.Endpoint, Insecure: px.Insecure},
 		Runner:        runner,
 		Power:         power,
-		AgentPort:     px.AgentPort,
-		AgentToken:    px.AgentToken,
 	})
 }
 

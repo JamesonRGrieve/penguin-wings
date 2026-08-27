@@ -22,20 +22,20 @@ const EnvironmentType = "lxc"
 
 // Internal timeouts for the interface methods that take no context of their own.
 const (
-	createTimeout    = 15 * time.Minute
-	destroyTimeout   = 10 * time.Minute
-	existsTimeout    = 30 * time.Second
-	agentCallTimeout = 15 * time.Second
+	createTimeout  = 15 * time.Minute
+	destroyTimeout = 10 * time.Minute
+	existsTimeout  = 30 * time.Second
 )
 
-// ErrAgentUnavailable marks process-I/O operations (console, stdin, logs, exit
-// state) that require the in-container penguin-agent, which is not yet built.
-var ErrAgentUnavailable = errors.New("penguin-agent unavailable: process I/O not yet implemented")
+// ErrConsolePending marks console operations (Attach/SendCommand) that will be
+// served via PVE's terminal proxy, which is not yet wired.
+var ErrConsolePending = errors.New("lxc: PVE console not yet wired")
 
 // Environment realizes a Penguin server as a persistent Proxmox LXC. Infra
 // lifecycle (create/destroy/exists) runs through embedded OpenTofu (Runner);
-// power state (start/stop/status) runs through the PVE API (PVEClient); process
-// I/O (console/stdin/logs/exit) will run through the in-container penguin-agent.
+// power state and process visibility (start/stop/status/console/metrics) run
+// through the PVE API. The game runs from the egg's own OCI image as the image's
+// non-root user, so there is no in-container agent.
 type Environment struct {
 	mu sync.RWMutex
 
@@ -56,9 +56,6 @@ type Environment struct {
 
 	runner *Runner
 	power  *PVEClient
-
-	agentPort  int
-	agentToken string
 }
 
 // Config bundles everything needed to build an LXC environment for one server.
@@ -71,8 +68,6 @@ type Config struct {
 	Provider      ProviderConfig
 	Runner        *Runner
 	Power         *PVEClient
-	AgentPort     int
-	AgentToken    string
 }
 
 // New builds an LXC environment. The container need not exist yet.
@@ -88,18 +83,16 @@ func New(cfg Config) (*Environment, error) {
 		return nil, fmt.Errorf("lxc environment: power client is required")
 	}
 	return &Environment{
-		id:         cfg.ID,
-		config:     cfg.Configuration,
-		emitter:    events.NewBus(),
-		st:         system.NewAtomicString(environment.ProcessOfflineState),
-		node:       cfg.Node,
-		vmid:       cfg.VMID,
-		spec:       cfg.Spec,
-		provider:   cfg.Provider,
-		runner:     cfg.Runner,
-		power:      cfg.Power,
-		agentPort:  cfg.AgentPort,
-		agentToken: cfg.AgentToken,
+		id:       cfg.ID,
+		config:   cfg.Configuration,
+		emitter:  events.NewBus(),
+		st:       system.NewAtomicString(environment.ProcessOfflineState),
+		node:     cfg.Node,
+		vmid:     cfg.VMID,
+		spec:     cfg.Spec,
+		provider: cfg.Provider,
+		runner:   cfg.Runner,
+		power:    cfg.Power,
 	}, nil
 }
 
@@ -136,8 +129,8 @@ func (e *Environment) SetState(state string) {
 	}
 }
 
-// SetLogCallback registers the sink for the container's log output (fed by the
-// penguin-agent once attached).
+// SetLogCallback registers the sink for the container's console output (fed by
+// the PVE console stream once attached).
 func (e *Environment) SetLogCallback(f func([]byte)) {
 	e.logCallbackMx.Lock()
 	defer e.logCallbackMx.Unlock()
@@ -296,66 +289,20 @@ func (e *Environment) Uptime(ctx context.Context) (int64, error) {
 	return st.Uptime * int64(time.Second/time.Millisecond), nil
 }
 
-// agentClient resolves the in-container agent's address (via the container's
-// live IP) and returns a client for it. Returns ErrAgentUnavailable when no
-// agent token is configured.
-func (e *Environment) agentClient(ctx context.Context) (*AgentClient, error) {
-	if e.agentToken == "" {
-		return nil, ErrAgentUnavailable
-	}
-	ip, err := e.power.ContainerIPv4(ctx, e.node, e.vmid)
-	if err != nil {
-		return nil, fmt.Errorf("resolve agent address: %w", err)
-	}
-	return NewAgentClient(fmt.Sprintf("http://%s:%d", ip, e.agentPort), e.agentToken), nil
-}
+// Attach streams the container console to the registered log callback via PVE's
+// terminal proxy until the context is cancelled.
+// TODO: wire the PVE termproxy/vncwebsocket console protocol.
+func (e *Environment) Attach(_ context.Context) error { return ErrConsolePending }
 
-// Attach streams the container console output to the registered log callback via
-// the penguin-agent until the context is cancelled.
-func (e *Environment) Attach(ctx context.Context) error {
-	client, err := e.agentClient(ctx)
-	if err != nil {
-		return err
-	}
-	return client.Attach(ctx, func(line []byte) {
-		e.logCallbackMx.Lock()
-		cb := e.logCallback
-		e.logCallbackMx.Unlock()
-		if cb != nil {
-			cb(line)
-		}
-	})
-}
+// SendCommand writes a console command to the container via PVE's terminal proxy.
+// TODO: wire the PVE termproxy console.
+func (e *Environment) SendCommand(string) error { return ErrConsolePending }
 
-// SendCommand writes a console command to the game process stdin via the agent.
-func (e *Environment) SendCommand(command string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
-	defer cancel()
-	client, err := e.agentClient(ctx)
-	if err != nil {
-		return err
-	}
-	return client.SendCommand(ctx, command)
-}
+// Readlog returns recent console output. PVE keeps no historical console log —
+// the live stream comes from Attach — so this returns nothing.
+func (e *Environment) Readlog(int) ([]string, error) { return nil, nil }
 
-// Readlog returns up to the last n console lines via the agent.
-func (e *Environment) Readlog(n int) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
-	defer cancel()
-	client, err := e.agentClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return client.Readlog(ctx, n)
-}
-
-// ExitState returns the game process exit code and OOM flag via the agent.
-func (e *Environment) ExitState() (uint32, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
-	defer cancel()
-	client, err := e.agentClient(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-	return client.ExitState(ctx)
-}
+// ExitState is best-effort: PVE does not expose the game process exit code, so a
+// stopped container reports a clean (code 0, no OOM) exit. Crash handling keys
+// off the stopped state instead.
+func (e *Environment) ExitState() (uint32, bool, error) { return 0, false, nil }
