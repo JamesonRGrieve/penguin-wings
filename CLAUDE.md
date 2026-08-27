@@ -47,6 +47,19 @@ dependency on any private infra.
   `penguin-agent` was dropped as redundant once the egg's OCI image — not a
   hand-built base template — became the container base; PVE's metrics are
   container-wide via cgroups, more accurate than a per-process agent.)
+- **Egg install runs over a scoped node channel — not root, not an agent.** The
+  egg's own install script must run *inside* the freshly-created OCI container as
+  container-root, which the PVE REST API cannot do — so Wings uses a **scoped
+  `penguin@pam` node account**: an SSH key whose `sudo` is restricted by a wrapper
+  (`/usr/local/bin/penguin-pct`) to only `pct exec`/`pct push` over Penguin's vmid
+  range, alongside the PVE API token used for lifecycle. **Never hypervisor
+  root.** Install sequence (`environment/lxc/install.go`): create the CT from the
+  egg image → override the entrypoint to a keepalive (`sleep`) and Start so
+  exec/push work → `pct push` the egg install script → `pct exec` a wrapper that
+  writes `/etc/resolv.conf`, symlinks `/mnt/server`→`/home/container`, exports the
+  egg variables and runs the egg's `install.sh` → chown to the `container` user →
+  install the run-script (the egg `STARTUP`) and point the entrypoint at it →
+  Stop. The next Start boots straight into the game. **Nothing per-egg is edited.**
 
 ## How it maps onto the existing daemon
 
@@ -60,6 +73,32 @@ minimal disturbance (good for clean rebases). The interface cleaves in two:
 | `Create` `Destroy` `Exists` `IsRunning` `Start` `Stop` `WaitForStop` `Terminate` `InSituUpdate` | Embedded Tofu + bpg (infra, incl. OCI image pull) + PVE power API |
 | `Attach` `SendCommand` `Readlog` `ExitState` `SetLogCallback` `Uptime` | PVE API — console via `termproxy`, uptime/state via `status/current`, exit best-effort off container state |
 | `Type` `Config` `Events` `State`/`SetState` | Reused daemon plumbing (`Type()` → `"lxc"`) |
+
+## Realization gotchas (lab-proven on lab-primus)
+
+Hard-won specifics the create→install→run path depends on — each cost a debugging
+pass, so they live here as invariants:
+
+- **bpg `environment_variables` silently no-ops** for OCI containers. Egg
+  variables reach the game only via the install wrapper's `export`s and the
+  baked-in run-script — never via bpg env.
+- **OCI (unmanaged) containers get no resolver from PVE** (`initialization.dns`
+  does not apply), so the install wrapper writes `/etc/resolv.conf` itself before
+  the egg script fetches game files. A game CT that "can't resolve host" is this.
+- **Embedded tofu must not hit the public registry.** A filesystem provider
+  mirror is configured via `/root/.tofurc` with `HOME=/root` — the runner env
+  strips `TF_*`, so `TF_CLI_CONFIG_FILE` is unavailable.
+- **Redeploying the Wings binary into its running CT:** `pct push` into a running
+  CT silently fails (text-file-busy) and leaves a **stale** binary. Always
+  `systemctl stop wings` → `pct push` → `systemctl start wings`, then verify the
+  in-CT inode changed.
+- **The lab bridge (`vmbr0`) is a LIVE `/24`, not an isolated net.** CT IPs must
+  be chosen from genuinely-free addresses (ping/ARP-sweep first). A collision
+  surfaces **indirectly** — as a Panel↔Wings `ConnectionException` (HTTP 500) from
+  contested/stale ARP, or the game port simply never binding — **never** as an
+  obvious duplicate-IP error. Current lab layout: Wings `192.168.2.231`, Panel
+  `192.168.2.242`, game CTs `192.168.2.232` (the allocation IP becomes the static
+  CT IP via `serverToLXCSpec`).
 
 ## Source of truth
 
@@ -93,21 +132,29 @@ bootstrap. `--no-verify` forbidden without explicit authorization.
    and the scoped `Penguin` token all nailed (see `README.md`).
 2. **Wings core** — `environment/lxc` (`LXCSpec` + JSON renderer + lifecycle)
    replaces the Docker environment behind `ProcessEnvironment`. Container is
-   created from the egg image (`EnsureOCIImage` → bpg). DONE bar the game-launch.
+   created from the egg image (`EnsureOCIImage` → bpg). **DONE**, including the
+   game-launch (see Phase 5).
 3. **PVE-native process I/O** — console (`termproxy`), metrics, and exit state via
    the PVE API; no in-container agent. Console wiring is the open item.
 4. **Panel changes** — see `penguin-panel/CLAUDE.md`.
 5. **v1 hardening** — egg install-script + startup-command execution (the
-   game-launch), compatibility pass, tests, docs.
+   game-launch) **built** (`environment/lxc/install.go`, run over the scoped
+   `penguin@pam` channel) and **proven end to end on lab-primus** via the Panel
+   application API: create → Wings pull+create+install → `start_on_completion`
+   boots the run-script entrypoint → the game binds its port. Remaining: PVE
+   console wiring, a broader compatibility pass across eggs, and tests/docs.
 
 ## Open / parked decisions
 
-- **Penguin git remote/hosting** — undecided; no Penguin `origin` yet, only
-  `upstream`.
-- **Game-launch (Phase 5)** — OPEN. The egg's install script and startup command
-  must run in the OCI container without an agent: the run path is the image's
-  entrypoint + the egg `STARTUP`; the install path (download server files into the
-  rootfs) is not yet wired. This is the last piece before a game actually runs.
+- **Penguin git remote/hosting** — `origin` =
+  `github.com/JamesonRGrieve/penguin-wings` (push target); `upstream` =
+  `pelican-dev/wings` for clean rebases.
+- **Game-launch (Phase 5)** — **DONE.** The egg's install script and startup
+  command run in the OCI container with no agent, over the scoped `penguin@pam`
+  node channel (`environment/lxc/install.go`): the install path writes game files
+  into the rootfs and installs the run-script as the entrypoint; the run path is
+  that entrypoint (the egg `STARTUP`), booted by `start_on_completion`. Proven end
+  to end on lab-primus through the Panel application API.
 - **PVE console (termproxy)** — OPEN. `Attach`/`SendCommand` return
   `ErrConsolePending` until the `termproxy`/`vncwebsocket` protocol is wired;
   `ExitState` is best-effort (a stopped container reports a clean exit).
