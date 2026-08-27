@@ -49,10 +49,11 @@ type Environment struct {
 	logCallbackMx sync.Mutex
 	logCallback   func([]byte)
 
-	node     string
-	vmid     int
-	spec     LXCSpec
-	provider ProviderConfig
+	node         string
+	vmid         int
+	spec         LXCSpec
+	provider     ProviderConfig
+	imageStorage string
 
 	runner *Runner
 	power  *PVEClient
@@ -68,6 +69,9 @@ type Config struct {
 	Provider      ProviderConfig
 	Runner        *Runner
 	Power         *PVEClient
+	// ImageStorage is the vztmpl-capable storage egg OCI images are pulled onto;
+	// defaults to DefaultImageStorage.
+	ImageStorage string
 }
 
 // New builds an LXC environment. The container need not exist yet.
@@ -82,17 +86,22 @@ func New(cfg Config) (*Environment, error) {
 	case cfg.Power == nil:
 		return nil, fmt.Errorf("lxc environment: power client is required")
 	}
+	imageStorage := cfg.ImageStorage
+	if imageStorage == "" {
+		imageStorage = DefaultImageStorage
+	}
 	return &Environment{
-		id:       cfg.ID,
-		config:   cfg.Configuration,
-		emitter:  events.NewBus(),
-		st:       system.NewAtomicString(environment.ProcessOfflineState),
-		node:     cfg.Node,
-		vmid:     cfg.VMID,
-		spec:     cfg.Spec,
-		provider: cfg.Provider,
-		runner:   cfg.Runner,
-		power:    cfg.Power,
+		id:           cfg.ID,
+		config:       cfg.Configuration,
+		emitter:      events.NewBus(),
+		st:           system.NewAtomicString(environment.ProcessOfflineState),
+		node:         cfg.Node,
+		vmid:         cfg.VMID,
+		spec:         cfg.Spec,
+		provider:     cfg.Provider,
+		imageStorage: imageStorage,
+		runner:       cfg.Runner,
+		power:        cfg.Power,
 	}, nil
 }
 
@@ -162,11 +171,22 @@ func (e *Environment) IsRunning(ctx context.Context) (bool, error) {
 	return st.Running(), nil
 }
 
-// Create realizes the container via `tofu apply` (idempotent).
+// Create realizes the container via `tofu apply` (idempotent). When the spec
+// carries an egg OCI image rather than a resolved template, the image is first
+// pulled onto storage (idempotent, shared across servers on the same egg) and the
+// resulting vztmpl volid becomes the container's template.
 func (e *Environment) Create() error {
 	ctx, cancel := context.WithTimeout(context.Background(), createTimeout)
 	defer cancel()
-	if err := e.runner.WriteConfig(e.spec, e.provider); err != nil {
+	spec := e.spec
+	if spec.TemplateFileID == "" && spec.Image != "" {
+		volid, err := e.power.EnsureOCIImage(ctx, e.node, e.imageStorage, spec.Image)
+		if err != nil {
+			return fmt.Errorf("ensure egg image: %w", err)
+		}
+		spec.TemplateFileID = volid
+	}
+	if err := e.runner.WriteConfig(spec, e.provider); err != nil {
 		return err
 	}
 	if err := e.runner.Init(ctx); err != nil {

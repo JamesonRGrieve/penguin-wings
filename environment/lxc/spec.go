@@ -30,6 +30,7 @@ const (
 	DefaultNetworkName   = "veth0"
 	DefaultBridge        = "vmbr0"
 	DefaultRootDatastore = "local-lvm"
+	DefaultImageStorage  = "local"
 	DefaultOSType        = "unmanaged"
 
 	DefaultCores       = 1
@@ -115,8 +116,12 @@ type LXCSpec struct {
 	Description string
 	Tags        []string
 
-	// Base image.
-	TemplateFileID string // operating_system.template_file_id (required).
+	// Base image. Image is the egg's OCI image reference (e.g.
+	// "ghcr.io/pelican-eggs/yolks:java_21"); the environment pulls it onto storage
+	// and resolves TemplateFileID from it before rendering. TemplateFileID (the
+	// resulting vztmpl volid) is what the renderer emits and is required at render.
+	TemplateFileID string // operating_system.template_file_id (required at render).
+	Image          string // egg OCI image ref, resolved to TemplateFileID by the environment.
 	OSType         string // operating_system.type; defaults to DefaultOSType.
 	Unprivileged   bool
 	Features       Features
@@ -132,8 +137,12 @@ type LXCSpec struct {
 	Mounts []Mount
 
 	// Network.
-	NetworkName  string // defaults to DefaultNetworkName.
-	Bridge       string // defaults to DefaultBridge.
+	NetworkName string // defaults to DefaultNetworkName.
+	Bridge      string // defaults to DefaultBridge.
+	// HostManaged has PVE configure and run the NIC (host-side DHCP/addressing)
+	// for the container. Required for OCI application containers, which have no
+	// init to configure their own networking. Requires PVE 9.1+.
+	HostManaged  bool
 	VLAN         int    // 802.1q tag; 0 = untagged.
 	MACAddress   string // optional stable MAC for the NIC.
 	IPv4         IPv4Config

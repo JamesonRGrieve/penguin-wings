@@ -23,18 +23,16 @@ type ProxmoxConfiguration struct {
 	// Storage is the datastore for container root filesystems.
 	Storage string `default:"local-lvm" json:"storage" yaml:"storage"`
 
+	// ImageStorage is the (vztmpl-capable) storage that egg OCI images are pulled
+	// onto and containers are created from. Distinct from Storage: images are
+	// file-backed templates, root filesystems are volumes.
+	ImageStorage string `default:"local" json:"image_storage" yaml:"image_storage"`
+
 	// Bridge is the network bridge new container NICs attach to.
 	Bridge string `default:"vmbr0" json:"bridge" yaml:"bridge"`
 
 	// Vlan tags the container NIC (0 = untagged).
 	Vlan int `json:"vlan" yaml:"vlan"`
-
-	// Template is the base OS template new containers are built from, e.g.
-	// local:vztmpl/debian-13-standard_13.6-1_amd64.tar.zst.
-	Template string `json:"template" yaml:"template"`
-
-	// OsType hints the container OS to Proxmox (alpine, debian, ubuntu, unmanaged).
-	OsType string `default:"unmanaged" json:"os_type" yaml:"os_type"`
 
 	// Unprivileged runs containers unprivileged.
 	Unprivileged bool `default:"true" json:"unprivileged" yaml:"unprivileged"`
@@ -50,11 +48,6 @@ type ProxmoxConfiguration struct {
 	// StateDirectory holds the per-server OpenTofu workspaces. Defaults to a
 	// "tofu" directory under the system root directory when empty.
 	StateDirectory string `json:"state_directory" yaml:"state_directory"`
-
-	// TemplateMap maps a server's selected egg image (the exact docker image ref)
-	// to a base LXC template, overriding Template for that image. Realizes egg to
-	// template selection without a Panel schema change.
-	TemplateMap map[string]string `json:"template_map" yaml:"template_map"`
 
 	// Gateway, when set, gives containers a static IPv4 built from the server's
 	// default allocation IP and SubnetPrefix with this gateway. Otherwise DHCP.

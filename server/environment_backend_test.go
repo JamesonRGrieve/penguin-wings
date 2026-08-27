@@ -14,6 +14,7 @@ func TestServerToLXCSpec(t *testing.T) {
 	s := &Server{}
 	s.cfg.Pid = 7
 	s.cfg.Uuid = "abc123"
+	s.cfg.Container.Image = "ghcr.io/pelican-eggs/yolks:java_21"
 	s.cfg.Build = environment.Limits{CpuLimit: 250, MemoryLimit: 2048, Swap: 512, DiskSpace: 10240}
 
 	px := config.ProxmoxConfiguration{
@@ -21,8 +22,6 @@ func TestServerToLXCSpec(t *testing.T) {
 		Storage:      "local-zfs",
 		Bridge:       "vmbr1",
 		Vlan:         39,
-		Template:     "local:vztmpl/debian-13.tar.zst",
-		OsType:       "debian",
 		Unprivileged: true,
 		VmidBase:     100000,
 	}
@@ -44,8 +43,16 @@ func TestServerToLXCSpec(t *testing.T) {
 	if spec.Node != "pve1" || spec.RootDatastore != "local-zfs" || spec.Bridge != "vmbr1" || spec.VLAN != 39 {
 		t.Errorf("placement/network mismatch: %+v", spec)
 	}
-	if spec.TemplateFileID != "local:vztmpl/debian-13.tar.zst" || spec.OSType != "debian" || !spec.Unprivileged {
-		t.Errorf("template/os mismatch: %+v", spec)
+	// The egg's OCI image is the container base; TemplateFileID is resolved from it
+	// at Create time, so it is deliberately empty on the mapped spec.
+	if spec.Image != "ghcr.io/pelican-eggs/yolks:java_21" {
+		t.Errorf("Image = %q, want the egg OCI image", spec.Image)
+	}
+	if spec.TemplateFileID != "" {
+		t.Errorf("TemplateFileID = %q, want empty (resolved from Image at Create)", spec.TemplateFileID)
+	}
+	if !spec.Unprivileged || !spec.HostManaged {
+		t.Errorf("want an unprivileged, host-managed app container: %+v", spec)
 	}
 	if spec.Hostname != "penguin-7" {
 		t.Errorf("Hostname = %q, want penguin-7", spec.Hostname)
@@ -53,12 +60,14 @@ func TestServerToLXCSpec(t *testing.T) {
 	if spec.IPv4.Address != lxc.DHCPAddress {
 		t.Errorf("IPv4 = %q, want dhcp", spec.IPv4.Address)
 	}
+	// Renderable once the image has resolved to a template volid.
+	spec.TemplateFileID = "local:vztmpl/ghcr_io_pelican_eggs_yolks_java_21.tar"
 	if err := spec.Validate(); err != nil {
-		t.Errorf("mapped spec should be renderable: %v", err)
+		t.Errorf("resolved spec should be renderable: %v", err)
 	}
 }
 
-func TestServerToLXCSpecTemplateMapAndStaticIP(t *testing.T) {
+func TestServerToLXCSpecStaticIP(t *testing.T) {
 	s := &Server{}
 	s.cfg.Pid = 3
 	s.cfg.Uuid = "srv"
@@ -68,13 +77,9 @@ func TestServerToLXCSpecTemplateMapAndStaticIP(t *testing.T) {
 	}
 
 	px := config.ProxmoxConfiguration{
-		Node:     "pve1",
-		Storage:  "local-zfs",
-		Bridge:   "vmbr0",
-		Template: "local:vztmpl/default.tar.zst",
-		TemplateMap: map[string]string{
-			"ghcr.io/pelican-eggs/games:java": "local:vztmpl/java.tar.zst",
-		},
+		Node:         "pve1",
+		Storage:      "local-zfs",
+		Bridge:       "vmbr0",
 		Gateway:      "10.0.39.1",
 		SubnetPrefix: 24,
 		VmidBase:     100000,
@@ -82,12 +87,13 @@ func TestServerToLXCSpecTemplateMapAndStaticIP(t *testing.T) {
 
 	spec := serverToLXCSpec(s, px)
 
-	if spec.TemplateFileID != "local:vztmpl/java.tar.zst" {
-		t.Errorf("template = %q, want the image-mapped java template", spec.TemplateFileID)
+	if spec.Image != "ghcr.io/pelican-eggs/games:java" {
+		t.Errorf("Image = %q, want the egg OCI image", spec.Image)
 	}
 	if spec.IPv4.Address != "10.0.39.5/24" || spec.IPv4.Gateway != "10.0.39.1" {
 		t.Errorf("ipv4 = %+v, want static 10.0.39.5/24 gw 10.0.39.1", spec.IPv4)
 	}
+	spec.TemplateFileID = "local:vztmpl/x.tar"
 	if err := spec.Validate(); err != nil {
 		t.Errorf("static-IP spec should be renderable: %v", err)
 	}
