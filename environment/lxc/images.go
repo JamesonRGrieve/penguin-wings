@@ -138,10 +138,12 @@ func (c *PVEClient) waitTask(ctx context.Context, node, upid string) error {
 			return fmt.Errorf("decode task status: %w", err)
 		}
 		if wrap.Data.Status == "stopped" {
-			if wrap.Data.ExitStatus != "OK" {
-				return fmt.Errorf("task %s failed: %s", upid, wrap.Data.ExitStatus)
+			// PVE reports success as "OK" and success-with-warnings as "WARNINGS: N";
+			// anything else is a genuine failure.
+			if es := wrap.Data.ExitStatus; es == "OK" || strings.HasPrefix(es, "WARNINGS:") {
+				return nil
 			}
-			return nil
+			return fmt.Errorf("task %s failed: %s", upid, wrap.Data.ExitStatus)
 		}
 		select {
 		case <-ctx.Done():

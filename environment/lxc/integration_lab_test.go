@@ -42,7 +42,7 @@ func TestLabOCILifecycle(t *testing.T) {
 	image := labEnv("PENGUIN_LAB_IMAGE", "ghcr.io/pelican-eggs/yolks:java_21")
 	vmid, _ := strconv.Atoi(labEnv("PENGUIN_LAB_VMID", "990310"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
 	power, err := NewPVEClient(PVEClientConfig{Endpoint: endpoint, APIToken: token, Insecure: true})
@@ -89,6 +89,15 @@ func TestLabOCILifecycle(t *testing.T) {
 		t.Fatalf("tofu init: %v", err)
 	}
 	t.Cleanup(func() {
+		// The server layer stops a server before deleting it; mirror that so tofu
+		// destroy is not racing a running container for its config lock.
+		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer ccancel()
+		_ = power.Stop(cctx, node, vmid)
+		_ = power.WaitForStatus(cctx, node, vmid, StatusStopped)
+		// Let the stop task release the PVE config lock before destroy (the lab CPU
+		// is slow enough that back-to-back stop+destroy can race the flock).
+		time.Sleep(8 * time.Second)
 		if err := runner.Destroy(context.Background()); err != nil {
 			t.Errorf("destroy: %v", err)
 		}
@@ -101,7 +110,7 @@ func TestLabOCILifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status after create: %v", err)
 	}
-	t.Logf("container %d created from OCI image, status=%q", vmid, st.Status)
+	t.Logf("container %d created from OCI image (status=%q)", vmid, st.Status)
 }
 
 func labEnv(key, def string) string {

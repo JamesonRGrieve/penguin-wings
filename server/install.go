@@ -24,6 +24,7 @@ import (
 
 	"github.com/pelican/wings/config"
 	"github.com/pelican/wings/environment"
+	"github.com/pelican/wings/environment/lxc"
 	"github.com/pelican/wings/remote"
 	"github.com/pelican/wings/system"
 )
@@ -103,6 +104,23 @@ func (s *Server) internalInstall() error {
 	if err != nil {
 		return err
 	}
+
+	// The LXC backend runs the egg's own install script inside the server's own
+	// container over the scoped SSH channel (as container-root); Docker uses a
+	// throwaway install container.
+	if env, ok := s.Environment.(*lxc.Environment); ok {
+		s.Log().Info("beginning LXC installation process for server")
+		if err := env.Install(s.Context(), lxc.InstallSpec{
+			Script:     script.Script,
+			Env:        splitEnvPairs(s.GetEnvironmentVariables()),
+			Invocation: s.Config().Invocation,
+		}); err != nil {
+			return err
+		}
+		s.Log().Info("completed installation process for server")
+		return nil
+	}
+
 	p, err := NewInstallationProcess(s, &script)
 	if err != nil {
 		return err
@@ -115,6 +133,18 @@ func (s *Server) internalInstall() error {
 
 	s.Log().Info("completed installation process for server")
 	return nil
+}
+
+// splitEnvPairs turns a slice of "KEY=value" strings into a map for the LXC
+// install wrapper.
+func splitEnvPairs(pairs []string) map[string]string {
+	out := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		if i := strings.IndexByte(p, '='); i >= 0 {
+			out[p[:i]] = p[i+1:]
+		}
+	}
+	return out
 }
 
 type InstallationProcess struct {
@@ -177,7 +207,7 @@ func (s *Server) SetRestoring(state bool) {
 }
 
 func (s *Server) IsInProtectedState() bool {
-	return s.IsInstalling() || s.IsTransferring() || s.IsRestoring()	
+	return s.IsInstalling() || s.IsTransferring() || s.IsRestoring()
 }
 
 // RemoveContainer removes the installation container for the server.

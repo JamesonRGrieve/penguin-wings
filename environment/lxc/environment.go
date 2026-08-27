@@ -57,6 +57,7 @@ type Environment struct {
 
 	runner *Runner
 	power  *PVEClient
+	ssh    *SSHClient
 }
 
 // Config bundles everything needed to build an LXC environment for one server.
@@ -69,6 +70,8 @@ type Config struct {
 	Provider      ProviderConfig
 	Runner        *Runner
 	Power         *PVEClient
+	// SSH is the scoped node channel for the install phase; nil disables install.
+	SSH *SSHClient
 	// ImageStorage is the vztmpl-capable storage egg OCI images are pulled onto;
 	// defaults to DefaultImageStorage.
 	ImageStorage string
@@ -102,6 +105,7 @@ func New(cfg Config) (*Environment, error) {
 		imageStorage: imageStorage,
 		runner:       cfg.Runner,
 		power:        cfg.Power,
+		ssh:          cfg.SSH,
 	}, nil
 }
 

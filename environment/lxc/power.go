@@ -126,27 +126,51 @@ func (c *PVEClient) Status(ctx context.Context, node string, vmid int) (Containe
 	return wrap.Data, nil
 }
 
-// Start powers on the container. The PVE call is asynchronous; use WaitForStatus
-// to block until the container reaches the running state.
+// Start powers on the container and waits for the start task to finish, so the
+// container's config lock is released before any follow-up operation.
 func (c *PVEClient) Start(ctx context.Context, node string, vmid int) error {
-	_, err := c.do(ctx, http.MethodPost, fmt.Sprintf("/nodes/%s/lxc/%d/status/start", node, vmid), url.Values{})
-	return err
+	return c.doTask(ctx, node, http.MethodPost, fmt.Sprintf("/nodes/%s/lxc/%d/status/start", node, vmid), url.Values{})
 }
 
-// Shutdown requests a graceful shutdown, allowing timeout seconds before the
-// PVE side force-stops. A zero timeout uses the node default.
+// Shutdown requests a graceful shutdown, allowing timeout seconds before the PVE
+// side force-stops, and waits for the shutdown task to finish. A zero timeout
+// uses the node default.
 func (c *PVEClient) Shutdown(ctx context.Context, node string, vmid int, timeout time.Duration) error {
 	form := url.Values{}
 	if timeout > 0 {
 		form.Set("timeout", fmt.Sprintf("%d", int(timeout.Seconds())))
 	}
-	_, err := c.do(ctx, http.MethodPost, fmt.Sprintf("/nodes/%s/lxc/%d/status/shutdown", node, vmid), form)
-	return err
+	return c.doTask(ctx, node, http.MethodPost, fmt.Sprintf("/nodes/%s/lxc/%d/status/shutdown", node, vmid), form)
 }
 
-// Stop force-stops the container immediately.
+// Stop force-stops the container immediately and waits for the stop task.
 func (c *PVEClient) Stop(ctx context.Context, node string, vmid int) error {
-	_, err := c.do(ctx, http.MethodPost, fmt.Sprintf("/nodes/%s/lxc/%d/status/stop", node, vmid), url.Values{})
+	return c.doTask(ctx, node, http.MethodPost, fmt.Sprintf("/nodes/%s/lxc/%d/status/stop", node, vmid), url.Values{})
+}
+
+// doTask issues an asynchronous PVE operation and blocks until its node task
+// completes. PVE holds the container's config lock for the life of the task —
+// well past the moment the status flips — so returning early lets a follow-up
+// call race the lock. If the response is not a task handle, it falls back to the
+// caller's own status polling.
+func (c *PVEClient) doTask(ctx context.Context, node, method, path string, form url.Values) error {
+	data, err := c.do(ctx, method, path, form)
+	if err != nil {
+		return err
+	}
+	upid, err := decodeTaskUPID(data)
+	if err != nil {
+		return nil
+	}
+	return c.waitTask(ctx, node, upid)
+}
+
+// SetEntrypoint sets the container's init entrypoint via the config API. Used to
+// switch between the install-phase keepalive and the game run-script. It is a
+// synchronous config write, not a node task.
+func (c *PVEClient) SetEntrypoint(ctx context.Context, node string, vmid int, entrypoint string) error {
+	form := url.Values{"entrypoint": {entrypoint}}
+	_, err := c.do(ctx, http.MethodPut, fmt.Sprintf("/nodes/%s/lxc/%d/config", node, vmid), form)
 	return err
 }
 
