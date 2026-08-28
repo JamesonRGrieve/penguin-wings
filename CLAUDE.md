@@ -99,6 +99,35 @@ pass, so they live here as invariants:
   obvious duplicate-IP error. Current lab layout: Wings `192.168.2.231`, Panel
   `192.168.2.242`, game CTs `192.168.2.232` (the allocation IP becomes the static
   CT IP via `serverToLXCSpec`).
+- **PVE does not apply the OCI image's `config.Env`** (PATH, JAVA_HOME, …) to an
+  unmanaged CT's init. Wings fetches the image config from the registry
+  (`ociconfig.go`, token→manifest→config-blob, ghcr.io anon) and exports it in the
+  install wrapper + run-script. Without it the egg's runtime is off-PATH (e.g.
+  `java` at `/opt/java/openjdk/bin` → the container exits 127 on boot).
+- **The Panel resolves nothing; Wings resolves the startup `{{TOKEN}}`s.** The
+  LXC install passes the invocation through `parseInvocation` (as the Docker
+  entrypoint does) so the run-script execs `-jar server.jar`, not a literal
+  `{{SERVER_JARFILE}}`.
+- **Egg install scripts may ship with CRLF line endings** — strip `\r\n`→`\n`
+  before running or bash dies on `$'\r'` / mangled `elif`.
+- **`start_on_completion` launches the game after install** (backend-agnostic,
+  `router_system.go`). If the game exits immediately (missing config, crash), the
+  Wings crash handler restarts it — the CT then flaps, and un-timeout'd
+  `pct exec` against it will hang; guard container probes with `timeout`.
+
+## Known LXC-backend gaps (findings)
+
+- **File operations do not reach the container.** Wings' filesystem layer — egg
+  `config.files` (`UpdateConfigurationFiles`), the client file-manager API, SFTP,
+  backups — all go through `s.Filesystem()`, a **Wings-local volume dir**, not the
+  game CT's rootfs. For LXC the game's files live in the CT (written by the egg
+  install over `pct`), so none of those features touch the running server yet.
+  Consequence: a game that needs a panel-applied config step — e.g. Minecraft's
+  `eula.txt=true`, which the unmodified Paper egg does **not** automate — cannot be
+  completed through the Panel on LXC. Routing file ops to the container (pct
+  push/pull or an SFTP shim) is the next major backend piece. Games whose port
+  binds from egg-install output + image defaults (Terraria, Factorio) are
+  unaffected and work end to end today.
 
 ## Source of truth
 
