@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/apex/log"
 )
 
 const (
@@ -50,17 +52,30 @@ func (e *Environment) Install(ctx context.Context, spec InstallSpec) error {
 	if err := e.Create(); err != nil {
 		return fmt.Errorf("create container: %w", err)
 	}
+	// PVE does not apply the egg OCI image's config env (PATH, JAVA_HOME, …) to
+	// the container init, so fetch it from the registry and export it in the
+	// install + run scripts — otherwise the egg's install tools and its game
+	// runtime aren't on PATH. Best-effort: a fetch failure just means a bare PATH.
+	imageEnv, err := FetchImageEnv(ctx, e.spec.Image)
+	if err != nil {
+		log.WithField("image", e.spec.Image).WithField("error", err).
+			Warn("lxc: could not fetch OCI image env; container will run with a bare PATH")
+		imageEnv = nil
+	}
 	if err := e.power.SetEntrypoint(ctx, e.node, e.vmid, keepaliveEntrypoint); err != nil {
 		return fmt.Errorf("set keepalive entrypoint: %w", err)
 	}
 	if err := e.power.Start(ctx, e.node, e.vmid); err != nil {
 		return fmt.Errorf("start for install: %w", err)
 	}
-	// 2. Push and run the egg's own install script as root.
-	if err := e.ssh.Push(e.vmid, []byte(spec.Script), "0755", eggScriptPath); err != nil {
+	// 2. Push and run the egg's own install script as root. Some eggs store the
+	//    script with CRLF line endings; strip the carriage returns so POSIX bash
+	//    doesn't choke on `$'\r'` (a run-time normalization, not an egg edit).
+	eggScript := strings.ReplaceAll(spec.Script, "\r\n", "\n")
+	if err := e.ssh.Push(e.vmid, []byte(eggScript), "0755", eggScriptPath); err != nil {
 		return fmt.Errorf("push egg install script: %w", err)
 	}
-	if err := e.ssh.Push(e.vmid, []byte(installWrapper(spec.Env, e.spec.Nameservers)), "0755", wrapperPath); err != nil {
+	if err := e.ssh.Push(e.vmid, []byte(installWrapper(spec.Env, e.spec.Nameservers, imageEnv)), "0755", wrapperPath); err != nil {
 		return fmt.Errorf("push install wrapper: %w", err)
 	}
 	if out, err := e.ssh.PctExec(e.vmid, "bash", wrapperPath); err != nil {
@@ -72,7 +87,7 @@ func (e *Environment) Install(ctx context.Context, spec InstallSpec) error {
 	}
 	// 4. Install the run-script, chown it, and point the entrypoint at it; stop so
 	//    the next Start boots straight into the game.
-	if err := e.ssh.Push(e.vmid, []byte(runScript(spec.Invocation, spec.Env)), "0755", runScriptPath); err != nil {
+	if err := e.ssh.Push(e.vmid, []byte(runScript(spec.Invocation, spec.Env, imageEnv)), "0755", runScriptPath); err != nil {
 		return fmt.Errorf("push run-script: %w", err)
 	}
 	if out, err := e.ssh.PctExec(e.vmid, "chown", containerUser+":"+containerUser, runScriptPath); err != nil {
@@ -90,7 +105,7 @@ func (e *Environment) Install(ctx context.Context, spec InstallSpec) error {
 // installWrapper builds the script the install runs inside the CT: it exposes the
 // egg's /mnt/server convention (symlinked to the data dir), exports the egg
 // variables, and invokes the egg's own script. Values are single-quote escaped.
-func installWrapper(env map[string]string, nameservers []string) string {
+func installWrapper(env map[string]string, nameservers []string, imageEnv []string) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/bash\nset -e\n")
 	// OCI (unmanaged) app containers get no resolver from PVE, so write one here:
@@ -101,6 +116,9 @@ func installWrapper(env map[string]string, nameservers []string) string {
 			b.WriteString("echo 'nameserver " + ns + "' >> /etc/resolv.conf\n")
 		}
 	}
+	// The egg's install script relies on the image's own env (its tools live on
+	// the image PATH, not the bare container default) — export it first.
+	writeImageEnvExports(&b, imageEnv)
 	b.WriteString("ln -sfn " + dataDir + " " + serverDir + "\n")
 	writeExports(&b, env)
 	b.WriteString("cd " + serverDir + "\n")
@@ -113,12 +131,28 @@ func installWrapper(env map[string]string, nameservers []string) string {
 // reference them as $VARS at runtime) then runs the invocation directly — not via
 // exec — so compound startups (subshells, backgrounded readers) behave, matching
 // the upstream yolk entrypoint.
-func runScript(invocation string, env map[string]string) string {
+func runScript(invocation string, env map[string]string, imageEnv []string) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/bash\ncd " + dataDir + "\n")
+	// Apply the image env first (PATH to the game runtime), then the egg vars.
+	writeImageEnvExports(&b, imageEnv)
 	writeExports(&b, env)
 	b.WriteString(invocation + "\n")
 	return b.String()
+}
+
+// writeImageEnvExports emits `export K=V` lines for an OCI image config's Env
+// ("K=value" entries), single-quote-escaping the value. PVE does not apply these
+// to the container init, so the install wrapper and run-script do — putting the
+// image's PATH (and JAVA_HOME etc.) in scope for the egg's tools and runtime.
+func writeImageEnvExports(b *strings.Builder, imageEnv []string) {
+	for _, kv := range imageEnv {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			continue
+		}
+		b.WriteString("export " + kv[:i] + "=" + singleQuote(kv[i+1:]) + "\n")
+	}
 }
 
 // writeExports emits sorted, single-quote-escaped `export K=V` lines.
