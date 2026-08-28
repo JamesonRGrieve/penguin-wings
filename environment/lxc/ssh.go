@@ -139,6 +139,22 @@ func (c *SSHClient) Push(vmid int, content []byte, perms, dest string) error {
 	return nil
 }
 
+// ReadFile returns the contents of a file inside the container via `cat`. A
+// missing file yields empty content and no error, so callers can treat a
+// not-yet-created config file as blank. Config files are text, so combined
+// stdout is a faithful copy.
+func (c *SSHClient) ReadFile(vmid int, srcPath string) ([]byte, error) {
+	out, err := c.PctExec(vmid, "cat", srcPath)
+	if err != nil {
+		// `cat` of a missing file exits non-zero; that is not an error here.
+		if strings.Contains(out, "No such file") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return []byte(out), nil
+}
+
 // shellJoin single-quote-escapes each argument for a POSIX shell command line,
 // so arbitrary values pass through the remote login shell unmangled.
 func shellJoin(args []string) string {

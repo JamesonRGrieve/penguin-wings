@@ -25,6 +25,8 @@ import (
 	"github.com/pelican/wings/config"
 	"github.com/pelican/wings/environment"
 	"github.com/pelican/wings/environment/lxc"
+	"github.com/pelican/wings/internal/ufs"
+	"github.com/pelican/wings/parser"
 	"github.com/pelican/wings/remote"
 	"github.com/pelican/wings/system"
 )
@@ -124,6 +126,7 @@ func (s *Server) internalInstall() error {
 				s.Config().Allocations.DefaultMapping.Port,
 				s.Config().Allocations.DefaultMapping.Ip,
 			),
+			ConfigFiles: s.lxcConfigFiles(),
 		}); err != nil {
 			return err
 		}
@@ -155,6 +158,59 @@ func splitEnvPairs(pairs []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// lxcConfigFiles adapts the egg's configuration-file definitions into the LXC
+// backend's transform list. The LXC backend can't reach the container through
+// Wings' filesystem layer, so instead of writing into a Wings-local volume it
+// pushes each rewritten file into the container; the actual rewrite reuses the
+// upstream parser via parseConfigContents.
+func (s *Server) lxcConfigFiles() []lxc.ConfigFile {
+	defs := s.ProcessConfiguration().ConfigurationFiles
+	out := make([]lxc.ConfigFile, 0, len(defs))
+	for _, cf := range defs {
+		cf := cf
+		out = append(out, lxc.ConfigFile{
+			Path: replaceParserConfigPathVariables(cf.FileName, s.Config().EnvVars),
+			Parse: func(current []byte) ([]byte, error) {
+				return s.parseConfigContents(cf, current)
+			},
+		})
+	}
+	return out
+}
+
+// parseConfigContents runs the upstream config parser over the current contents
+// of a file using a scratch file in the server's own filesystem, returning the
+// rewritten bytes. This keeps the parser (and its {{config.*}} resolution) fully
+// upstream while letting the LXC backend supply/collect the bytes itself.
+func (s *Server) parseConfigContents(cf parser.ConfigurationFile, current []byte) ([]byte, error) {
+	fs := s.Filesystem().UnixFS()
+	const scratch = ".penguin-cfg.tmp"
+	f, err := fs.Touch(scratch, ufs.O_RDWR|ufs.O_CREATE|ufs.O_TRUNC, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = fs.Remove(scratch) }()
+	if _, err := f.Write(current); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := cf.Parse(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	out, err := io.ReadAll(f)
+	_ = f.Close()
+	return out, err
 }
 
 type InstallationProcess struct {
