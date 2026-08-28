@@ -5,6 +5,7 @@ package lxc
 import (
 	"context"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -37,6 +38,18 @@ type InstallSpec struct {
 	Script     string            // the egg's installation script, verbatim
 	Env        map[string]string // egg variables, exported for install + run
 	Invocation string            // Panel-resolved startup command (run-script body)
+	// ConfigFiles are the egg's config-file transforms, applied into the CT after
+	// the egg install (port/config templating). Empty disables the step.
+	ConfigFiles []ConfigFile
+}
+
+// ConfigFile is one egg config-file transform. Path is relative to the data dir
+// inside the container; Parse rewrites the file's current contents. Parse is
+// injected by the server (which owns the config parser) so the lxc package stays
+// independent of it — keeping the fork's parser reuse upstream-clean.
+type ConfigFile struct {
+	Path  string
+	Parse func(current []byte) ([]byte, error)
 }
 
 // Install realizes a server end to end without touching the egg: create the CT
@@ -81,6 +94,11 @@ func (e *Environment) Install(ctx context.Context, spec InstallSpec) error {
 	if out, err := e.ssh.PctExec(e.vmid, "bash", wrapperPath); err != nil {
 		return fmt.Errorf("run egg install: %w\n%s", err, out)
 	}
+	// 2b. Apply the egg's config-file transforms into the CT (port/config
+	//     templating) while files are still root-owned, before the chown below.
+	if err := e.applyConfigFiles(spec.ConfigFiles); err != nil {
+		return fmt.Errorf("apply config files: %w", err)
+	}
 	// 3. Hand ownership of the installed files to the non-root game user.
 	if out, err := e.ssh.PctExec(e.vmid, "chown", "-R", containerUser+":"+containerUser, dataDir); err != nil {
 		return fmt.Errorf("chown data dir: %w\n%s", err, out)
@@ -98,6 +116,41 @@ func (e *Environment) Install(ctx context.Context, spec InstallSpec) error {
 	}
 	if err := e.power.SetEntrypoint(ctx, e.node, e.vmid, runScriptPath); err != nil {
 		return fmt.Errorf("set run entrypoint: %w", err)
+	}
+	return nil
+}
+
+// applyConfigFiles rewrites the egg's declared config files inside the container:
+// read the current contents over the scoped channel, run the server-injected
+// transform, and push the result back. A file that fails to parse is logged and
+// left as-is (the game can still boot with it) rather than failing the install.
+func (e *Environment) applyConfigFiles(files []ConfigFile) error {
+	for _, cf := range files {
+		if cf.Parse == nil || cf.Path == "" {
+			continue
+		}
+		ctPath := dataDir + "/" + strings.TrimPrefix(cf.Path, "/")
+		current, err := e.ssh.ReadFile(e.vmid, ctPath)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", ctPath, err)
+		}
+		parsed, err := cf.Parse(current)
+		if err != nil {
+			log.WithField("path", ctPath).WithField("error", err).
+				Warn("lxc: leaving config file as-is (parse failed)")
+			continue
+		}
+		if parsed == nil {
+			continue
+		}
+		if dir := path.Dir(ctPath); dir != "" && dir != dataDir {
+			if out, err := e.ssh.PctExec(e.vmid, "mkdir", "-p", dir); err != nil {
+				return fmt.Errorf("mkdir %s: %w\n%s", dir, err, out)
+			}
+		}
+		if err := e.ssh.Push(e.vmid, parsed, "0644", ctPath); err != nil {
+			return fmt.Errorf("push %s: %w", ctPath, err)
+		}
 	}
 	return nil
 }

@@ -117,17 +117,22 @@ pass, so they live here as invariants:
 
 ## Known LXC-backend gaps (findings)
 
-- **File operations do not reach the container.** Wings' filesystem layer — egg
-  `config.files` (`UpdateConfigurationFiles`), the client file-manager API, SFTP,
-  backups — all go through `s.Filesystem()`, a **Wings-local volume dir**, not the
-  game CT's rootfs. For LXC the game's files live in the CT (written by the egg
-  install over `pct`), so none of those features touch the running server yet.
-  Consequence: a game that needs a panel-applied config step — e.g. Minecraft's
-  `eula.txt=true`, which the unmodified Paper egg does **not** automate — cannot be
-  completed through the Panel on LXC; it also means the game uses **its own default
-  port**, not the allocation's (Teeworlds bound its default `8308`, not `8303`).
-  Routing file ops to the container (pct push/pull or an SFTP shim) is the next
-  major backend piece and the single highest-value one.
+- **Config files reach the container; the rest of the file layer does not (yet).**
+  Egg `config.files` are applied **into the CT at install time**: `server/install.go`
+  reuses the **upstream parser** unchanged against a scratch file in `s.Filesystem()`
+  and pushes each rewritten file over the scoped channel
+  (`lxc.InstallSpec.ConfigFiles` → `applyConfigFiles`, reading the current file with
+  `pct exec cat` and writing it back with `pct push`). Port/config templating now
+  works — **Teeworlds binds the allocation port `sv_port 8303`, not its default
+  `8308`**. Two bounds: it runs **at install only** (a later variable change +
+  restart won't re-template until start-time application is wired), and it can only
+  rewrite files the egg **declares** in `config.files`. **Still Wings-local, not the
+  CT:** the client file-manager write, SFTP, backups — all `s.Filesystem()`. So a
+  game needing a panel-applied file the egg does *not* declare — e.g. Minecraft's
+  `eula.txt=true` (not a `config.files` entry, and the Paper egg does not automate
+  it) — still can't be completed until the file-manager write is routed to the
+  container too. Doing that (and start-time re-application) is the remaining
+  file-layer work.
 - **Egg self-sufficiency is real — with two operator disciplines.** A nine-egg
   sweep on lab-primus ran end to end for **Terraria, Factorio, Palworld, Velocity,
   Teeworlds, Valheim** (6/9) once you (a) **select the runtime image the egg
