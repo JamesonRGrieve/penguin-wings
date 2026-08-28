@@ -111,9 +111,19 @@ func (s *Server) internalInstall() error {
 	if env, ok := s.Environment.(*lxc.Environment); ok {
 		s.Log().Info("beginning LXC installation process for server")
 		if err := env.Install(s.Context(), lxc.InstallSpec{
-			Script:     script.Script,
-			Env:        splitEnvPairs(s.GetEnvironmentVariables()),
-			Invocation: s.Config().Invocation,
+			Script: script.Script,
+			Env:    splitEnvPairs(s.GetEnvironmentVariables()),
+			// Resolve the egg's {{TOKEN}} startup placeholders to concrete values
+			// (jarfile, memory, port, ip, egg vars) the same way the entrypoint
+			// STARTUP env is built — otherwise the run-script would exec a literal
+			// "{{SERVER_JARFILE}}" and the container would crash on boot.
+			Invocation: parseInvocation(
+				s.Config().Invocation,
+				s.Config().EnvVars,
+				s.MemoryLimit(),
+				s.Config().Allocations.DefaultMapping.Port,
+				s.Config().Allocations.DefaultMapping.Ip,
+			),
 		}); err != nil {
 			return err
 		}
