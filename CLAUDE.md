@@ -124,10 +124,21 @@ pass, so they live here as invariants:
   install over `pct`), so none of those features touch the running server yet.
   Consequence: a game that needs a panel-applied config step — e.g. Minecraft's
   `eula.txt=true`, which the unmodified Paper egg does **not** automate — cannot be
-  completed through the Panel on LXC. Routing file ops to the container (pct
-  push/pull or an SFTP shim) is the next major backend piece. Games whose port
-  binds from egg-install output + image defaults (Terraria, Factorio) are
-  unaffected and work end to end today.
+  completed through the Panel on LXC; it also means the game uses **its own default
+  port**, not the allocation's (Teeworlds bound its default `8308`, not `8303`).
+  Routing file ops to the container (pct push/pull or an SFTP shim) is the next
+  major backend piece and the single highest-value one.
+- **Egg self-sufficiency is real — with two operator disciplines.** A nine-egg
+  sweep on lab-primus ran end to end for **Terraria, Factorio, Palworld, Velocity,
+  Teeworlds, Valheim** (6/9) once you (a) **select the runtime image the egg
+  offers that matches the game** — Velocity needs `java_25`, not `java_21`; a
+  wrong pick is `UnsupportedClassVersionError`, not a pipeline fault — and (b)
+  **supply required inputs a user would** (Palworld/Valheim passwords, an
+  `alpha_dash`-valid one). The three non-passes are specific, not systemic:
+  Minecraft (config.files/EULA, above), **7 Days to Die** (steamcmd `AppID 294420
+  (Missing configuration)` anonymously — no egg credential path; Palworld/Valheim
+  Steam installs work), and **Mindustry** (the egg ships only a `java_11` image
+  but its jar needs Java 17 — an egg-side inconsistency Wings can't fix).
 
 ## Source of truth
 
