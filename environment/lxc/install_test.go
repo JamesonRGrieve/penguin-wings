@@ -36,9 +36,20 @@ func TestShellJoin(t *testing.T) {
 
 func TestInstallWrapper(t *testing.T) {
 	t.Parallel()
-	w := installWrapper(map[string]string{"SERVER_JARFILE": "server.jar", "MSG": "hi there"}, []string{"1.1.1.1"})
+	w := installWrapper(
+		map[string]string{"SERVER_JARFILE": "server.jar", "MSG": "hi there"},
+		[]string{"1.1.1.1"},
+		[]string{"PATH=/opt/java/openjdk/bin:/usr/bin", "JAVA_HOME=/opt/java/openjdk"},
+	)
 	if !strings.Contains(w, "echo 'nameserver 1.1.1.1' >> /etc/resolv.conf") {
 		t.Errorf("wrapper missing resolver:\n%s", w)
+	}
+	if !strings.Contains(w, "export PATH='/opt/java/openjdk/bin:/usr/bin'") {
+		t.Errorf("wrapper missing image PATH export:\n%s", w)
+	}
+	// Image env must be exported before the egg vars so the egg's tools resolve.
+	if strings.Index(w, "export PATH=") > strings.Index(w, "export MSG=") {
+		t.Error("image env not exported before egg vars")
 	}
 	if !strings.Contains(w, "ln -sfn "+dataDir+" "+serverDir) {
 		t.Errorf("wrapper missing /mnt/server symlink:\n%s", w)
@@ -60,9 +71,12 @@ func TestInstallWrapper(t *testing.T) {
 
 func TestRunScript(t *testing.T) {
 	t.Parallel()
-	r := runScript("java -Xms128M -jar server.jar", map[string]string{"RCON_PORT": "25575"})
+	r := runScript("java -Xms128M -jar server.jar", map[string]string{"RCON_PORT": "25575"}, []string{"PATH=/opt/java/openjdk/bin"})
 	if !strings.Contains(r, "cd "+dataDir) {
 		t.Errorf("run-script missing cd:\n%s", r)
+	}
+	if !strings.Contains(r, "export PATH='/opt/java/openjdk/bin'") {
+		t.Errorf("run-script missing image PATH export:\n%s", r)
 	}
 	if !strings.Contains(r, "export RCON_PORT='25575'") {
 		t.Errorf("run-script missing env export:\n%s", r)
