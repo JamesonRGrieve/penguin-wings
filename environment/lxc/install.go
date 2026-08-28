@@ -155,6 +155,71 @@ func (e *Environment) applyConfigFiles(files []ConfigFile) error {
 	return nil
 }
 
+// WriteContainerFile writes content to a path relative to the data dir inside the
+// container over the scoped channel. It backs the file-manager write endpoint for
+// LXC servers, so panel file edits — notably accepting Minecraft's EULA, which no
+// egg config.files entry covers — reach the container. `pct push` works whether
+// the CT is running or stopped; files land root-owned but world-readable (0644),
+// which is enough for a server to read them.
+func (e *Environment) WriteContainerFile(ctx context.Context, relPath string, content []byte, perms string) error {
+	if e.ssh == nil {
+		return fmt.Errorf("lxc: ssh channel not configured")
+	}
+	if perms == "" {
+		perms = "0644"
+	}
+	ctPath := dataDir + "/" + strings.TrimPrefix(relPath, "/")
+	return e.withRunning(ctx, func() error {
+		if dir := path.Dir(ctPath); dir != "" && dir != dataDir {
+			if out, err := e.ssh.PctExec(e.vmid, "mkdir", "-p", dir); err != nil {
+				return fmt.Errorf("mkdir %s: %w\n%s", dir, err, out)
+			}
+		}
+		return e.ssh.Push(e.vmid, content, perms, ctPath)
+	})
+}
+
+// ReadContainerFile returns the contents of a path relative to the data dir inside
+// the container, backing the file-manager read endpoint for LXC servers.
+func (e *Environment) ReadContainerFile(ctx context.Context, relPath string) ([]byte, error) {
+	if e.ssh == nil {
+		return nil, fmt.Errorf("lxc: ssh channel not configured")
+	}
+	ctPath := dataDir + "/" + strings.TrimPrefix(relPath, "/")
+	var out []byte
+	err := e.withRunning(ctx, func() error {
+		b, err := e.ssh.ReadFile(e.vmid, ctPath)
+		out = b
+		return err
+	})
+	return out, err
+}
+
+// withRunning guarantees the container is running for a scoped file operation
+// (`pct exec`/`pct push` refuse a stopped CT). If it has to boot the container it
+// does so with the keepalive entrypoint and restores the stopped run state
+// afterward — so a file edit (e.g. accepting the EULA) works on an offline server
+// the way writing into a Docker volume does.
+func (e *Environment) withRunning(ctx context.Context, fn func() error) error {
+	running, err := e.IsRunning(ctx)
+	if err != nil {
+		return err
+	}
+	if !running {
+		if err := e.power.SetEntrypoint(ctx, e.node, e.vmid, keepaliveEntrypoint); err != nil {
+			return err
+		}
+		if err := e.power.Start(ctx, e.node, e.vmid); err != nil {
+			return err
+		}
+		defer func() {
+			_ = e.power.Stop(ctx, e.node, e.vmid)
+			_ = e.power.SetEntrypoint(ctx, e.node, e.vmid, runScriptPath)
+		}()
+	}
+	return fn()
+}
+
 // installWrapper builds the script the install runs inside the CT: it exposes the
 // egg's /mnt/server convention (symlinked to the data dir), exports the egg
 // variables, and invokes the egg's own script. Values are single-quote escaped.

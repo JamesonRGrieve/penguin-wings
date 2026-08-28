@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/pelican/wings/config"
+	"github.com/pelican/wings/environment/lxc"
 	"github.com/pelican/wings/internal/models"
 	"github.com/pelican/wings/router/downloader"
 	"github.com/pelican/wings/router/middleware"
@@ -33,6 +34,21 @@ func getServerFileContents(c *gin.Context) {
 	p := strings.TrimLeft(c.Query("file"), "/")
 	if err := s.Filesystem().IsIgnored(p); err != nil {
 		middleware.CaptureAndAbort(c, err)
+		return
+	}
+	// LXC files live in the container; read them over the scoped channel.
+	if env, ok := s.Environment.(*lxc.Environment); ok {
+		content, err := env.ReadContainerFile(c.Request.Context(), p)
+		if err != nil {
+			middleware.CaptureAndAbort(c, err)
+			return
+		}
+		c.Header("Content-Length", strconv.Itoa(len(content)))
+		if c.Query("download") != "" {
+			c.Header("Content-Disposition", "attachment; filename="+strconv.Quote(path.Base(p)))
+			c.Header("Content-Type", "application/octet-stream")
+		}
+		_, _ = c.Writer.Write(content)
 		return
 	}
 	// Open the same path that was checked against the denylist above.
@@ -272,6 +288,22 @@ func postServerWriteFile(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 			"error": "Missing Content-Length",
 		})
+		return
+	}
+
+	// The LXC backend's files live in the container, not Wings' local volume, so
+	// route the write over the scoped channel instead of the local filesystem.
+	if env, ok := s.Environment.(*lxc.Environment); ok {
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			middleware.CaptureAndAbort(c, err)
+			return
+		}
+		if err := env.WriteContainerFile(c.Request.Context(), f, body, "0644"); err != nil {
+			middleware.CaptureAndAbort(c, err)
+			return
+		}
+		c.Status(http.StatusNoContent)
 		return
 	}
 

@@ -117,33 +117,37 @@ pass, so they live here as invariants:
 
 ## Known LXC-backend gaps (findings)
 
-- **Config files reach the container; the rest of the file layer does not (yet).**
-  Egg `config.files` are applied **into the CT at install time**: `server/install.go`
-  reuses the **upstream parser** unchanged against a scratch file in `s.Filesystem()`
-  and pushes each rewritten file over the scoped channel
-  (`lxc.InstallSpec.ConfigFiles` → `applyConfigFiles`, reading the current file with
-  `pct exec cat` and writing it back with `pct push`). Port/config templating now
-  works — **Teeworlds binds the allocation port `sv_port 8303`, not its default
-  `8308`**. Two bounds: it runs **at install only** (a later variable change +
-  restart won't re-template until start-time application is wired), and it can only
-  rewrite files the egg **declares** in `config.files`. **Still Wings-local, not the
-  CT:** the client file-manager write, SFTP, backups — all `s.Filesystem()`. So a
-  game needing a panel-applied file the egg does *not* declare — e.g. Minecraft's
-  `eula.txt=true` (not a `config.files` entry, and the Paper egg does not automate
-  it) — still can't be completed until the file-manager write is routed to the
-  container too. Doing that (and start-time re-application) is the remaining
-  file-layer work.
+- **The LXC file layer routes to the container** (config files + file manager),
+  both reusing upstream and reaching the CT over the scoped channel:
+  - **Egg `config.files` at install:** `server/install.go` runs the **unchanged
+    upstream parser** against a scratch file in `s.Filesystem()` and pushes each
+    rewritten file into the CT (`lxc.InstallSpec.ConfigFiles` → `applyConfigFiles`;
+    `pct exec cat` in, `pct push` out). Port/config templating works — **Teeworlds
+    binds the allocation port `sv_port 8303`, not its default `8308`**.
+  - **File-manager read/write:** `postServerWriteFile` / `getServerFileContents`
+    branch to `WriteContainerFile` / `ReadContainerFile` for LXC servers. `pct`
+    refuses a stopped CT, so `withRunning` briefly boots a keepalive for the op and
+    restores the stopped run state — a Docker volume is writable while the
+    container is off; this mirrors that (side effect: a momentary run). This is
+    what lets a game needing a panel-applied file the egg does *not* declare work:
+    **Minecraft now runs end to end** — create, accept the EULA via the file
+    manager (`eula.txt=true`), start via the power API, bind `25565` — zero egg
+    edits.
+  - **Remaining:** SFTP and backups still target `s.Filesystem()`, and
+    `config.files` apply **at install only** (a later variable change + restart
+    won't re-template until start-time re-application is wired).
 - **Egg self-sufficiency is real — with two operator disciplines.** A nine-egg
   sweep on lab-primus ran end to end for **Terraria, Factorio, Palworld, Velocity,
-  Teeworlds, Valheim** (6/9) once you (a) **select the runtime image the egg
-  offers that matches the game** — Velocity needs `java_25`, not `java_21`; a
-  wrong pick is `UnsupportedClassVersionError`, not a pipeline fault — and (b)
-  **supply required inputs a user would** (Palworld/Valheim passwords, an
-  `alpha_dash`-valid one). The three non-passes are specific, not systemic:
-  Minecraft (config.files/EULA, above), **7 Days to Die** (steamcmd `AppID 294420
-  (Missing configuration)` anonymously — no egg credential path; Palworld/Valheim
-  Steam installs work), and **Mindustry** (the egg ships only a `java_11` image
-  but its jar needs Java 17 — an egg-side inconsistency Wings can't fix).
+  Teeworlds, Valheim, and Minecraft** (7/9) once you (a) **select the runtime image
+  the egg offers that matches the game** — Velocity needs `java_25`, not `java_21`;
+  a wrong pick is `UnsupportedClassVersionError`, not a pipeline fault — and (b)
+  **supply the inputs/actions a user would** (Palworld/Valheim passwords; accepting
+  Minecraft's EULA via the file manager, now that the file layer reaches the CT).
+  The two non-passes are egg-specific, not pipeline faults: **7 Days to Die**
+  (steamcmd `AppID 294420 (Missing configuration)` anonymously — no egg credential
+  path; Palworld/Valheim Steam installs work) and **Mindustry** (the egg ships only
+  a `java_11` image but its jar needs Java 17 — an egg-side inconsistency Wings
+  can't fix).
 
 ## Source of truth
 
