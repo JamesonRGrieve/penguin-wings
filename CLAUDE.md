@@ -164,11 +164,11 @@ realization record — one workspace per server. **No NetBox.**
 - Relicensed MIT→AGPL; upstream MIT attribution preserved in `NOTICE` (required by
   the MIT terms — do not remove).
 
-## Quality gates (workspace §8)
+## Quality gates (SOP → *Code Quality and Testing*)
 
 gofmt/goimports clean, `go vet` + `golangci-lint` clean, full `go test ./...`
 green, typing/lint ratchets never regress — enforced by a pre-commit hook wired at
-bootstrap. `--no-verify` forbidden without explicit authorization.
+bootstrap. `--no-verify` only under the batch-work rule (SOP → *Git and Commits*).
 
 ## Phase plan
 
