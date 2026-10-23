@@ -6,8 +6,8 @@ container backend with **direct Proxmox LXC** provisioning driven by **embedded
 OpenTofu**. AGPL-3.0-or-later.
 
 > Read the workspace `/home/jameson/Source/CLAUDE.md` and the user tenets first.
-> Go standard: `/home/jameson/Source/ai-prompts/go.md`. Tofu standard:
-> `/home/jameson/Source/ai-prompts/tofu.md`. This file wins on Penguin specifics.
+> Go standard: SOP *Stack Standards → Go*. Tofu standard:
+> SOP *Stack Standards → OpenTofu*. This file wins on Penguin specifics.
 
 ## Product shape
 
