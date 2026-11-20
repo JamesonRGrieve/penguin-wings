@@ -3,6 +3,7 @@
 package lxc
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -83,5 +84,26 @@ func TestRunScript(t *testing.T) {
 	}
 	if !strings.Contains(r, "java -Xms128M -jar server.jar") {
 		t.Errorf("run-script missing invocation:\n%s", r)
+	}
+}
+
+func TestContainerPathStaysInDataDir(t *testing.T) {
+	ok := map[string]string{
+		"eula.txt":           "/home/container/eula.txt",
+		"/config/server.cfg": "/home/container/config/server.cfg",
+		"a/../b.txt":         "/home/container/b.txt",
+		"":                   "/home/container",
+		"plugins/./x.jar":    "/home/container/plugins/x.jar",
+	}
+	for in, want := range ok {
+		got, err := containerPath(in)
+		if err != nil || got != want {
+			t.Errorf("containerPath(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"../../etc/shadow", "/../etc/passwd", "a/../../root/.ssh/authorized_keys", "..", "../container-evil/x"} {
+		if got, err := containerPath(in); !errors.Is(err, ErrPathOutsideDataDir) {
+			t.Errorf("containerPath(%q) = %q, %v; want ErrPathOutsideDataDir", in, got, err)
+		}
 	}
 }

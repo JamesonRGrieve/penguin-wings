@@ -4,6 +4,7 @@ package lxc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -168,7 +169,10 @@ func (e *Environment) WriteContainerFile(ctx context.Context, relPath string, co
 	if perms == "" {
 		perms = "0644"
 	}
-	ctPath := dataDir + "/" + strings.TrimPrefix(relPath, "/")
+	ctPath, err := containerPath(relPath)
+	if err != nil {
+		return err
+	}
 	return e.withRunning(ctx, func() error {
 		if dir := path.Dir(ctPath); dir != "" && dir != dataDir {
 			if out, err := e.ssh.PctExec(e.vmid, "mkdir", "-p", dir); err != nil {
@@ -185,14 +189,33 @@ func (e *Environment) ReadContainerFile(ctx context.Context, relPath string) ([]
 	if e.ssh == nil {
 		return nil, fmt.Errorf("lxc: ssh channel not configured")
 	}
-	ctPath := dataDir + "/" + strings.TrimPrefix(relPath, "/")
+	ctPath, err := containerPath(relPath)
+	if err != nil {
+		return nil, err
+	}
 	var out []byte
-	err := e.withRunning(ctx, func() error {
+	err = e.withRunning(ctx, func() error {
 		b, err := e.ssh.ReadFile(e.vmid, ctPath)
 		out = b
 		return err
 	})
 	return out, err
+}
+
+// ErrPathOutsideDataDir is returned when a file-manager path resolves outside the
+// server's data directory.
+var ErrPathOutsideDataDir = errors.New("lxc: path resolves outside the server data directory")
+
+// containerPath maps a file-manager path onto the data dir inside the container.
+// The scoped channel runs as container-root, so unlike the Docker backend (where
+// os.Root confines every path) nothing downstream stops "../" from reaching the
+// rest of the container; the path is cleaned and must stay under dataDir.
+func containerPath(relPath string) (string, error) {
+	p := path.Clean(dataDir + "/" + strings.TrimPrefix(relPath, "/"))
+	if p != dataDir && !strings.HasPrefix(p, dataDir+"/") {
+		return "", ErrPathOutsideDataDir
+	}
+	return p, nil
 }
 
 // withRunning guarantees the container is running for a scoped file operation
