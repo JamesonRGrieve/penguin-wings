@@ -25,7 +25,6 @@ import (
 	"github.com/pelican/wings/environment"
 	"github.com/pelican/wings/environment/docker"
 	"github.com/pelican/wings/environment/lxc"
-	"github.com/pelican/wings/internal/ufs"
 	"github.com/pelican/wings/parser"
 	"github.com/pelican/wings/remote"
 	"github.com/pelican/wings/system"
@@ -203,13 +202,13 @@ func (s *Server) lxcConfigFiles() []lxc.ConfigFile {
 // rewritten bytes. This keeps the parser (and its {{config.*}} resolution) fully
 // upstream while letting the LXC backend supply/collect the bytes itself.
 func (s *Server) parseConfigContents(cf parser.ConfigurationFile, current []byte) ([]byte, error) {
-	fs := s.Filesystem().UnixFS()
+	fs := s.Filesystem()
 	const scratch = ".penguin-cfg.tmp"
-	f, err := fs.Touch(scratch, ufs.O_RDWR|ufs.O_CREATE|ufs.O_TRUNC, 0o644)
+	f, err := fs.Touch(scratch, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = fs.Remove(scratch) }()
+	defer func() { _ = fs.Delete(scratch) }()
 	if _, err := f.Write(current); err != nil {
 		_ = f.Close()
 		return nil, err
