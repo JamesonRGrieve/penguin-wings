@@ -196,7 +196,9 @@ batch-work rule (SOP → *Git and Commits*).
 - **`scripts/gate.sh`** is the full gate (build, vet, lint, `go test ./...`),
   run on the build runner, never on the desktop. Upstream packages carry
   pre-existing `copylocks` vet findings, so the gate vets them with that one
-  analyzer off and vets `environment/lxc` fully.
+  analyzer off and vets `environment/lxc` fully. Runner layout (operator,
+  2026-11-20): `GATE_DIR=/var/cache/runner/penguin-wings` (persistent caches),
+  `GATE_OUT=/var/tmp/penguin-wings` (logs and scratch, wipeable any time).
 
 ## Phase plan
 
