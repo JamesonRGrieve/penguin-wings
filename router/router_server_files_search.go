@@ -106,6 +106,9 @@ func searchDirectory(s *server.Server, dir string, patternLower string, depth in
 
 func getFilesBySearch(c *gin.Context) {
 	s := middleware.ExtractServer(c)
+	if abortIfLXC(c, s) {
+		return
+	}
 	dir := strings.TrimSuffix(c.Query("directory"), "/")
 	pattern := c.Query("pattern")
 

@@ -130,7 +130,10 @@ func (e *Environment) applyConfigFiles(files []ConfigFile) error {
 		if cf.Parse == nil || cf.Path == "" {
 			continue
 		}
-		ctPath := dataDir + "/" + strings.TrimPrefix(cf.Path, "/")
+		ctPath, err := containerPath(cf.Path)
+		if err != nil {
+			return fmt.Errorf("config file %s: %w", cf.Path, err)
+		}
 		current, err := e.ssh.ReadFile(e.vmid, ctPath)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", ctPath, err)
@@ -152,16 +155,31 @@ func (e *Environment) applyConfigFiles(files []ConfigFile) error {
 		if err := e.ssh.Push(e.vmid, parsed, "0644", ctPath); err != nil {
 			return fmt.Errorf("push %s: %w", ctPath, err)
 		}
+		if err := e.chownToContainerUser(ctPath); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// ApplyConfigFiles re-applies the egg's config-file transforms in the container.
+// Upstream rewrites config files before every start (UpdateConfigurationFiles);
+// this is the LXC equivalent, so a changed variable takes effect on restart.
+func (e *Environment) ApplyConfigFiles(ctx context.Context, files []ConfigFile) error {
+	if e.ssh == nil {
+		return fmt.Errorf("lxc: ssh channel not configured")
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	return e.withRunning(ctx, func() error { return e.applyConfigFiles(files) })
 }
 
 // WriteContainerFile writes content to a path relative to the data dir inside the
 // container over the scoped channel. It backs the file-manager write endpoint for
 // LXC servers, so panel file edits — notably accepting Minecraft's EULA, which no
-// egg config.files entry covers — reach the container. `pct push` works whether
-// the CT is running or stopped; files land root-owned but world-readable (0644),
-// which is enough for a server to read them.
+// egg config.files entry covers — reach the container. Files are handed to the
+// container user so the game can rewrite them.
 func (e *Environment) WriteContainerFile(ctx context.Context, relPath string, content []byte, perms string) error {
 	if e.ssh == nil {
 		return fmt.Errorf("lxc: ssh channel not configured")
@@ -179,7 +197,10 @@ func (e *Environment) WriteContainerFile(ctx context.Context, relPath string, co
 				return fmt.Errorf("mkdir %s: %w\n%s", dir, err, out)
 			}
 		}
-		return e.ssh.Push(e.vmid, content, perms, ctPath)
+		if err := e.ssh.Push(e.vmid, content, perms, ctPath); err != nil {
+			return err
+		}
+		return e.chownToContainerUser(ctPath)
 	})
 }
 
@@ -224,6 +245,8 @@ func containerPath(relPath string) (string, error) {
 // afterward — so a file edit (e.g. accepting the EULA) works on an offline server
 // the way writing into a Docker volume does.
 func (e *Environment) withRunning(ctx context.Context, fn func() error) error {
+	e.fileMu.Lock()
+	defer e.fileMu.Unlock()
 	running, err := e.IsRunning(ctx)
 	if err != nil {
 		return err

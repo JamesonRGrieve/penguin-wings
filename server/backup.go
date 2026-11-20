@@ -83,6 +83,9 @@ func (s *Server) readIgnoreFile(name string) (string, error) {
 // websocket. We let the actual backup system handle notifying the panel of the
 // status, but that won't emit a websocket event.
 func (s *Server) Backup(b backup.BackupInterface) error {
+	// LXC servers are archived from a local mirror of the container's files,
+	// filled first so a server-wide ignore file in the container is honoured.
+	mirrorErr := s.mirrorLXCData()
 	ignored := b.Ignored()
 	if b.Ignored() == "" {
 		if i, err := s.getServerwideIgnoredFiles(); err != nil {
@@ -92,7 +95,12 @@ func (s *Server) Backup(b backup.BackupInterface) error {
 		}
 	}
 
-	ad, err := b.Generate(s.Context(), s.Filesystem(), ignored)
+	var ad *backup.ArchiveDetails
+	err := mirrorErr
+	if err == nil {
+		ad, err = b.Generate(s.Context(), s.Filesystem(), ignored)
+	}
+	s.dropLXCMirror()
 	if err != nil {
 		if err := s.notifyPanelOfBackup(b.Identifier(), &backup.ArchiveDetails{}, false); err != nil {
 			s.Log().WithFields(log.Fields{
@@ -180,6 +188,10 @@ func (s *Server) RestoreBackup(b backup.BackupInterface, reader io.ReadCloser, t
 			}
 		}
 	}
+
+	// LXC servers restore into an empty local mirror that is then pushed into
+	// the container.
+	s.dropLXCMirror()
 
 	// The archive is read from here. It is the reader given, unless that has to
 	// be saved to a file first so that it can be read more than once.
@@ -272,7 +284,7 @@ func (s *Server) RestoreBackup(b backup.BackupInterface, reader io.ReadCloser, t
 		}
 	}
 
-	return nil
+	return s.pushLXCRestore(truncate)
 }
 
 // verifyRestoreArchive reads every entry in the backup to check that it can be

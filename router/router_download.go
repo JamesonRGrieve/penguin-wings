@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"time"
 
@@ -106,6 +107,17 @@ func getDownloadFile(c *gin.Context) {
 
 	if err := s.Filesystem().IsIgnored(token.FilePath); err != nil {
 		middleware.CaptureAndAbort(c, err)
+		return
+	}
+
+	// LXC files live in the container; fetch them over the scoped channel.
+	if env, ok := lxcEnvironment(s); ok {
+		content, err := env.ReadContainerFile(c.Request.Context(), token.FilePath)
+		if err != nil {
+			middleware.CaptureAndAbort(c, err)
+			return
+		}
+		serveDownload(c, lxcReadSeeker(content), path.Base(token.FilePath), time.Time{})
 		return
 	}
 

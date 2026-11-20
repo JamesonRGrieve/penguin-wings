@@ -58,6 +58,10 @@ type Environment struct {
 	runner *Runner
 	power  *PVEClient
 	ssh    *SSHClient
+
+	// fileMu serializes scoped-channel file operations, so two of them can't
+	// race to boot (and then stop) a stopped container's keepalive.
+	fileMu sync.Mutex
 }
 
 // Config bundles everything needed to build an LXC environment for one server.

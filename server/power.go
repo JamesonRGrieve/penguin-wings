@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pelican/wings/config"
 	"github.com/pelican/wings/environment"
+	"github.com/pelican/wings/environment/lxc"
 	"github.com/pelican/wings/server/filesystem/quotas"
 	"github.com/pelican/wings/system"
 )
@@ -249,7 +250,15 @@ func (s *Server) onBeforeStart() error {
 	// server starts in a weird state and the user can manually adjust.
 	s.PublishConsoleOutputFromDaemon("Updating process configuration files...")
 	s.Log().Debug("updating server configuration files...")
-	s.UpdateConfigurationFiles()
+	// LXC servers keep their files in the container, so the egg's config files are
+	// rewritten there rather than in the empty Wings-local directory.
+	if env, ok := s.Environment.(*lxc.Environment); ok {
+		if err := env.ApplyConfigFiles(s.Context(), s.lxcConfigFiles()); err != nil {
+			s.Log().WithField("error", err).Error("failed to update server configuration files in the container")
+		}
+	} else {
+		s.UpdateConfigurationFiles()
+	}
 	s.Log().Debug("updated server configuration files")
 
 	if config.Get().System.CheckPermissionsOnBoot {

@@ -3,7 +3,9 @@
 package lxc
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path"
@@ -139,20 +141,47 @@ func (c *SSHClient) Push(vmid int, content []byte, perms, dest string) error {
 	return nil
 }
 
+// ExecStream runs argv inside the container like PctExec, but wires the
+// session's stdin and stdout to the caller and keeps stderr apart, so binary
+// data (file contents, tar streams) passes through unmangled. stdin may be nil.
+// The captured stderr is returned for diagnostics.
+func (c *SSHClient) ExecStream(vmid int, stdin io.Reader, stdout io.Writer, argv ...string) (string, error) {
+	conn, err := ssh.Dial("tcp", c.addr, c.client)
+	if err != nil {
+		return "", fmt.Errorf("lxc ssh dial: %w", err)
+	}
+	defer conn.Close()
+	sess, err := conn.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer sess.Close()
+	var stderr bytes.Buffer
+	sess.Stdin = stdin
+	sess.Stdout = stdout
+	sess.Stderr = &stderr
+	cmd := shellJoin(append([]string{"sudo", c.cfg.Wrapper, "exec", strconv.Itoa(vmid), "--"}, argv...))
+	if err := sess.Run(cmd); err != nil {
+		return stderr.String(), fmt.Errorf("pct exec %d: %w: %s", vmid, err, strings.TrimSpace(stderr.String()))
+	}
+	return stderr.String(), nil
+}
+
 // ReadFile returns the contents of a file inside the container via `cat`. A
 // missing file yields empty content and no error, so callers can treat a
-// not-yet-created config file as blank. Config files are text, so combined
-// stdout is a faithful copy.
+// not-yet-created config file as blank. stdout alone is the file, so binary
+// files read back byte for byte.
 func (c *SSHClient) ReadFile(vmid int, srcPath string) ([]byte, error) {
-	out, err := c.PctExec(vmid, "cat", srcPath)
+	var out bytes.Buffer
+	stderr, err := c.ExecStream(vmid, nil, &out, "cat", "--", srcPath)
 	if err != nil {
 		// `cat` of a missing file exits non-zero; that is not an error here.
-		if strings.Contains(out, "No such file") {
+		if strings.Contains(stderr, "No such file") {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return []byte(out), nil
+	return out.Bytes(), nil
 }
 
 // shellJoin single-quote-escapes each argument for a POSIX shell command line,

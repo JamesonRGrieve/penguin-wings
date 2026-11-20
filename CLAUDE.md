@@ -133,9 +133,28 @@ pass, so they live here as invariants:
     **Minecraft now runs end to end** — create, accept the EULA via the file
     manager (`eula.txt=true`), start via the power API, bind `25565` — zero egg
     edits.
-  - **Remaining:** SFTP and backups still target `s.Filesystem()`, and
-    `config.files` apply **at install only** (a later variable change + restart
-    won't re-template until start-time re-application is wired).
+  - **Every path is confined to `/home/container`** (`containerPath`): the
+    channel runs as container-root, so unlike Docker's `os.Root` nothing else
+    stops `../`.
+  - **File manager beyond read/write** (`environment/lxc/files.go`, branches in
+    `router/router_server_files.go` and `router_download.go`): list, rename,
+    delete, create-directory, upload and download reach the CT. Files Penguin
+    writes are chowned to the `container` user. Writes and uploads are capped at
+    `api.upload_limit` because the channel pushes whole files from memory.
+    Copy, compress, decompress, chmod, search and remote pull return **501** for
+    LXC servers rather than acting on the empty Wings-local directory.
+  - **`config.files` re-apply on every start** (`onBeforeStart` →
+    `ApplyConfigFiles`), like upstream's `UpdateConfigurationFiles`.
+  - **Backups and restores** use the Wings-local server dir as a temporary
+    mirror (`server/backup_lxc.go`, `environment/lxc/datasync.go`): the CT's data
+    dir is tarred into it before upstream's archiver runs, and a restore is
+    pushed back into the CT (a truncating restore keeps `.penguin-run.sh`). The
+    mirror is emptied afterwards.
+  - **SFTP is refused** for LXC servers (it would serve the empty local dir).
+  - **Not yet proven on lab-primus** (written 2026-11-20 without lab access):
+    the file ops beyond read/write, the backup/restore mirror, and start-time
+    config re-application. Unit tests cover parsing, tar round-trip and escape
+    refusal.
 - **Egg self-sufficiency is real — with two operator disciplines.** A nine-egg
   sweep on lab-primus ran end to end for **Terraria, Factorio, Palworld, Velocity,
   Teeworlds, Valheim, and Minecraft** (7/9) once you (a) **select the runtime image
@@ -167,8 +186,17 @@ realization record — one workspace per server. **No NetBox.**
 ## Quality gates (SOP → *Code Quality and Testing*)
 
 gofmt/goimports clean, `go vet` + `golangci-lint` clean, full `go test ./...`
-green, typing/lint ratchets never regress — enforced by a pre-commit hook wired at
-bootstrap. `--no-verify` only under the batch-work rule (SOP → *Git and Commits*).
+green, typing/lint ratchets never regress. `--no-verify` only under the
+batch-work rule (SOP → *Git and Commits*).
+
+- **`.githooks/pre-commit`** (enable once per clone: `git config core.hooksPath
+  .githooks`) runs the light checks on staged files: `git diff --check` and
+  gofmt. gofmt is scoped to staged files because upstream carries files newer
+  gofmt would rewrite.
+- **`scripts/gate.sh`** is the full gate (build, vet, lint, `go test ./...`),
+  run on the build runner, never on the desktop. Upstream packages carry
+  pre-existing `copylocks` vet findings, so the gate vets them with that one
+  analyzer off and vets `environment/lxc` fully.
 
 ## Phase plan
 
@@ -213,4 +241,4 @@ bootstrap. `--no-verify` only under the batch-work rule (SOP → *Git and Commit
   seam so a PDM backend (and/or an in-house PDM provider) slots in later.
 - **Deep module/namespace rename** and **user-visible rebrand** — deferred until
   after the Phase 1 technical proof (rebranding an unproven fork is premature).
-- **Pre-commit gates** — not yet wired.
+- **Pre-commit gates** — wired 2026-11-20 (see *Quality gates*).

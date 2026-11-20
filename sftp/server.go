@@ -23,6 +23,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/pelican/wings/config"
+	"github.com/pelican/wings/environment/lxc"
 	"github.com/pelican/wings/internal/network"
 	"github.com/pelican/wings/remote"
 	"github.com/pelican/wings/server"
@@ -372,6 +373,12 @@ func (c *SFTPServer) handle(sconn *ssh.ServerConn, chans <-chan ssh.NewChannel, 
 		srv, ok := c.manager.Get(sconn.Permissions.Extensions["uuid"])
 		if !ok {
 			_ = ch.Reject(ssh.ConnectionFailed, "server not found")
+			continue
+		}
+		// LXC servers keep their files in the container, which SFTP can't reach
+		// yet; refuse rather than serve the empty Wings-local directory.
+		if _, isLXC := srv.Environment.(*lxc.Environment); isLXC {
+			_ = ch.Reject(ssh.Prohibited, "SFTP is not supported for LXC servers yet")
 			continue
 		}
 

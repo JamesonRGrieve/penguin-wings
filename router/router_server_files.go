@@ -114,6 +114,22 @@ func getServerFileContents(c *gin.Context) {
 func getServerListDirectory(c *gin.Context) {
 	s := middleware.ExtractServer(c)
 	dir := c.Query("directory")
+	// LXC files live in the container; list them over the scoped channel.
+	if env, ok := lxcEnvironment(s); ok {
+		entries, err := env.ListDirectory(c.Request.Context(), dir)
+		if errors.Is(err, os.ErrNotExist) {
+			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+				"error": "The requested directory was not found on the server.",
+			})
+			return
+		}
+		if err != nil {
+			middleware.CaptureAndAbort(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, lxcStats(entries))
+		return
+	}
 	if stats, err := s.Filesystem().ListDirectory(dir); err != nil {
 		// If the error is that the folder does not exist return a 404.
 		if errors.Is(err, os.ErrNotExist) {
@@ -170,7 +186,13 @@ func putServerRenameFiles(c *gin.Context) {
 				if err := fs.IsIgnoredNoFollow(pf, pt); err != nil {
 					return err
 				}
-				if err := fs.Rename(pf, pt); err != nil {
+				var err error
+				if env, ok := lxcEnvironment(s); ok {
+					err = env.Rename(ctx, pf, pt)
+				} else {
+					err = fs.Rename(pf, pt)
+				}
+				if err != nil {
 					// Return nil if the error is an is not exists.
 					// NOTE: os.IsNotExist() does not work if the error is wrapped.
 					if errors.Is(err, os.ErrNotExist) {
@@ -218,6 +240,9 @@ func postServerCopyFile(c *gin.Context) {
 		middleware.CaptureAndAbort(c, err)
 		return
 	}
+	if abortIfLXC(c, s) {
+		return
+	}
 	if err := s.Filesystem().Copy(data.Location); err != nil {
 		middleware.CaptureAndAbort(c, err)
 		return
@@ -258,6 +283,13 @@ func postServerDeleteFiles(c *gin.Context) {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
+				if env, ok := lxcEnvironment(s); ok {
+					// Denylisted entries are left in place, as SafeDeleteRecursively does.
+					if s.Filesystem().IsIgnoredNoFollow(pi) != nil {
+						return nil
+					}
+					return env.Delete(ctx, len(s.Config().Egg.FileDenylist) == 0, pi)
+				}
 				return s.Filesystem().SafeDeleteRecursively(pi)
 			}
 		})
@@ -294,7 +326,13 @@ func postServerWriteFile(c *gin.Context) {
 	// The LXC backend's files live in the container, not Wings' local volume, so
 	// route the write over the scoped channel instead of the local filesystem.
 	if env, ok := s.Environment.(*lxc.Environment); ok {
-		body, err := io.ReadAll(c.Request.Body)
+		body, err := readLimited(c.Request.Body, config.Get().Api.UploadLimit*1024*1024)
+		if errors.Is(err, errLXCTooLarge) {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error": "File is larger than the maximum upload size.",
+			})
+			return
+		}
 		if err != nil {
 			middleware.CaptureAndAbort(c, err)
 			return
@@ -336,6 +374,9 @@ func getServerPullingFiles(c *gin.Context) {
 // Writes the contents of the remote URL to a file on a server.
 func postServerPullRemoteFile(c *gin.Context) {
 	s := ExtractServer(c)
+	if abortIfLXC(c, s) {
+		return
+	}
 	var data struct {
 		// Deprecated
 		Directory  string `binding:"required_without=RootPath,omitempty" json:"directory"`
@@ -457,6 +498,14 @@ func postServerCreateDirectory(c *gin.Context) {
 		return
 	}
 
+	if env, ok := lxcEnvironment(s); ok {
+		if err := env.CreateDirectory(c.Request.Context(), path.Join(data.Path, data.Name)); err != nil {
+			middleware.CaptureAndAbort(c, err)
+			return
+		}
+		c.Status(http.StatusNoContent)
+		return
+	}
 	if err := s.Filesystem().CreateDirectory(data.Name, data.Path); err != nil {
 		if errors.Is(err, syscall.ENOTDIR) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
@@ -484,6 +533,9 @@ func postServerCreateDirectory(c *gin.Context) {
 
 func postServerCompressFiles(c *gin.Context) {
 	s := ExtractServer(c)
+	if abortIfLXC(c, s) {
+		return
+	}
 
 	var data struct {
 		RootPath  string   `json:"root"`
@@ -544,6 +596,9 @@ func postServerDecompressFiles(c *gin.Context) {
 	}
 
 	s := middleware.ExtractServer(c)
+	if abortIfLXC(c, s) {
+		return
+	}
 	lg := middleware.ExtractLogger(c).WithFields(log.Fields{"root_path": data.RootPath, "file": data.File})
 
 	// Refuse an archive that does not fit before writing anything, as main does,
@@ -581,6 +636,9 @@ var errInvalidFileMode = errors.New("invalid file mode")
 
 func postServerChmodFile(c *gin.Context) {
 	s := ExtractServer(c)
+	if abortIfLXC(c, s) {
+		return
+	}
 
 	var data struct {
 		Root  string      `json:"root"`
@@ -724,6 +782,17 @@ var errUploadTooLarge = errors.New("router: uploaded file is larger than the upl
 func handleFileUpload(p string, s *server.Server, r io.Reader, limit int64) error {
 	if err := s.Filesystem().IsIgnored(p); err != nil {
 		return err
+	}
+
+	if env, ok := lxcEnvironment(s); ok {
+		body, err := readLimited(r, limit)
+		if errors.Is(err, errLXCTooLarge) {
+			return errUploadTooLarge
+		}
+		if err != nil {
+			return err
+		}
+		return env.WriteContainerFile(context.Background(), p, body, "0644")
 	}
 
 	// A refused or failed upload never replaces the existing file.
