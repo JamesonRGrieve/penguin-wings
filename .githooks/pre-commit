@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Penguin pre-commit: the light checks, on staged files only. gofmt is scoped to
+# staged files because upstream carries files that newer gofmt would rewrite,
+# and reformatting upstream files is rebase noise. The full gate (vet, lint,
+# tests) is scripts/gate.sh, run on the build runner, never on the desktop.
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+git diff --cached --check
+mapfile -t gofiles < <(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+if ((${#gofiles[@]})); then
+  bad=$(gofmt -l "${gofiles[@]}")
+  if [[ -n "$bad" ]]; then
+    echo "gofmt needed on:"; echo "$bad"; exit 1
+  fi
+fi
